@@ -17,6 +17,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID } from "@/lib/constants";
+import { ImageUpload } from "@/components/image-upload";
 
 // Function to create initialize instruction manually
 function createInitializeInstruction(
@@ -79,7 +80,9 @@ export default function CreateTakeover() {
     v1TokenMint: "So11111111111111111111111111111111111111112",
     minAmount: "1000",
     duration: "7",
-    customRewardRate: "1.0"
+    customRewardRate: "1.0",
+    tokenName: "Test Token",
+    imageUrl: ""
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -209,7 +212,9 @@ export default function CreateTakeover() {
             minAmount: minAmount.toString(),
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            customRewardRate: rewardRate
+            customRewardRate: rewardRate,
+            tokenName: formData.tokenName,
+            imageUrl: formData.imageUrl
           })
         });
 
@@ -243,7 +248,9 @@ export default function CreateTakeover() {
         v1TokenMint: "So11111111111111111111111111111111111111112",
         minAmount: "1000",
         duration: "7",
-        customRewardRate: "1.0"
+        customRewardRate: "1.0",
+        tokenName: "Test Token",
+        imageUrl: ""
       });
 
     } catch (error: any) {
@@ -282,6 +289,17 @@ export default function CreateTakeover() {
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-2">
+              <Label htmlFor="tokenName">Token Name</Label>
+              <Input
+                id="tokenName"
+                value={formData.tokenName}
+                onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
+                placeholder="My Awesome Token"
+                required
+              />
+            </div>
+
+            <div className="space-y-2">
               <Label htmlFor="v1TokenMint">V1 Token Mint Address</Label>
               <Input
                 id="v1TokenMint"
@@ -294,6 +312,13 @@ export default function CreateTakeover() {
                 Using Wrapped SOL for testing
               </p>
             </div>
+
+            {/* Image Upload Section */}
+            <ImageUpload
+              onImageUploaded={(imageUrl) => setFormData(prev => ({ ...prev, imageUrl }))}
+              currentImageUrl={formData.imageUrl}
+              label="Takeover Image"
+            />
 
             <div className="space-y-2">
               <Label htmlFor="minAmount">Minimum Amount Required (tokens)</Label>

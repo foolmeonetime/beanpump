@@ -38,7 +38,8 @@ export async function GET(request: NextRequest) {
       hasV2Mint: row.has_v2_mint,
       customRewardRate: parseFloat(row.custom_reward_rate),
       progressPercentage: parseFloat(row.progress_percentage || 0),
-      tokenName: row.token_name || 'Unknown Token', // Add token name
+      tokenName: row.token_name || 'Unknown Token',
+      imageUrl: row.image_url || null, // Add image URL
     }));
     
     return NextResponse.json({ takeovers });
@@ -63,7 +64,8 @@ export async function POST(request: NextRequest) {
       startTime,
       endTime,
       customRewardRate,
-      tokenName // Add token name to the expected fields
+      tokenName, // Add token name to the expected fields
+      imageUrl // Add image URL to the expected fields
     } = body;
 
     const client = await pool.connect();
@@ -71,8 +73,8 @@ export async function POST(request: NextRequest) {
     const result = await client.query(`
       INSERT INTO takeovers (
         address, authority, v1_token_mint, vault, min_amount, 
-        start_time, end_time, custom_reward_rate, token_name
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        start_time, end_time, custom_reward_rate, token_name, image_url
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
       RETURNING *
     `, [
       address,
@@ -83,7 +85,8 @@ export async function POST(request: NextRequest) {
       startTime,
       endTime,
       customRewardRate,
-      tokenName
+      tokenName,
+      imageUrl
     ]);
     
     client.release();

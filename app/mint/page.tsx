@@ -16,6 +16,7 @@ import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { WalletMultiButton } from "@/components/wallet-multi-button";
+import { ImageUpload } from "@/components/image-upload";
 
 interface CreatedToken {
   mint: string;
@@ -116,7 +117,8 @@ function TokenMinter() {
     name: "Test Token",
     symbol: "TEST",
     decimals: "6",
-    initialSupply: "1000000"
+    initialSupply: "1000000",
+    imageUrl: "" // Add image URL field
   });
 
   const createToken = async (e: React.FormEvent) => {
@@ -225,7 +227,8 @@ function TokenMinter() {
         name: "Test Token",
         symbol: "TEST", 
         decimals: "6",
-        initialSupply: "1000000"
+        initialSupply: "1000000",
+        imageUrl: ""
       });
 
     } catch (error: any) {
@@ -318,6 +321,13 @@ function TokenMinter() {
                 />
               </div>
             </div>
+
+            {/* Image Upload Section */}
+            <ImageUpload
+              onImageUploaded={(imageUrl) => setFormData(prev => ({ ...prev, imageUrl }))}
+              currentImageUrl={formData.imageUrl}
+              label="Token Image"
+            />
 
             <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
               <p className="text-sm text-blue-800 dark:text-blue-200">

@@ -27,6 +27,7 @@ interface Takeover {
   progressPercentage: number;
   created_at: string;
   tokenName: string;
+  imageUrl?: string; // Add image URL
 }
 
 export function TakeoversList() {
@@ -160,12 +161,29 @@ export function TakeoversList() {
             <Card key={takeover.id} className="hover:shadow-lg transition-shadow">
               <CardHeader className="pb-3">
                 <CardTitle className="flex justify-between items-start">
-                  <div>
-                    <span className="text-lg">{takeover.tokenName} Takeover</span>
-                    <div className="text-sm text-gray-500 font-normal mt-1">
-                      Token: {takeover.tokenName}
-                      <br />
-                      <span className="font-mono text-xs">{takeover.v1_token_mint.slice(0, 8)}...{takeover.v1_token_mint.slice(-4)}</span>
+                  <div className="flex items-center gap-3">
+                    {/* Token Image */}
+                    {takeover.imageUrl ? (
+                      <img 
+                        src={takeover.imageUrl} 
+                        alt={takeover.tokenName}
+                        className="w-12 h-12 rounded-full object-cover border-2 border-gray-200"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                      />
+                    ) : (
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white font-bold text-lg">
+                        {takeover.tokenName.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-lg">{takeover.tokenName} Takeover</span>
+                      <div className="text-sm text-gray-500 font-normal mt-1">
+                        Token: {takeover.tokenName}
+                        <br />
+                        <span className="font-mono text-xs">{takeover.v1_token_mint.slice(0, 8)}...{takeover.v1_token_mint.slice(-4)}</span>
+                      </div>
                     </div>
                   </div>
                   <span className={`text-xs px-3 py-1 rounded-full ${statusColor}`}>

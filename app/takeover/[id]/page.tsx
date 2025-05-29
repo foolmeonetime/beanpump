@@ -40,7 +40,8 @@ interface Takeover {
   status: 'active' | 'ended' | 'successful' | 'failed';
   progressPercentage: number;
   created_at: string;
-  tokenName: string; // Add token name
+  tokenName: string;
+  imageUrl?: string; // Add image URL
 }
 
 // Helper function to create ATA instruction if needed
@@ -477,8 +478,22 @@ export default function Page() {
           <Button variant="outline">← Back to Takeovers</Button>
         </Link>
         <div className="text-right">
-          <h1 className="text-2xl font-bold">{takeover.tokenName} Takeover</h1>
-          <p className="text-gray-500">Created by {takeover.authority.slice(0, 6)}...{takeover.authority.slice(-4)}</p>
+          <div className="flex items-center justify-end gap-3 mb-2">
+            {takeover.imageUrl && (
+              <img 
+                src={takeover.imageUrl} 
+                alt={takeover.tokenName}
+                className="w-16 h-16 rounded-full object-cover border-2 border-gray-200"
+                onError={(e) => {
+                  e.currentTarget.style.display = 'none';
+                }}
+              />
+            )}
+            <div>
+              <h1 className="text-2xl font-bold">{takeover.tokenName} Takeover</h1>
+              <p className="text-gray-500">Created by {takeover.authority.slice(0, 6)}...{takeover.authority.slice(-4)}</p>
+            </div>
+          </div>
         </div>
       </div>
 
