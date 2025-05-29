@@ -1,0 +1,661 @@
+{
+  "address": "CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ",
+  "metadata": {
+    "name": "community_takeover",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Community Takeover Program"
+  },
+  "instructions": [
+    {
+      "name": "airdrop_v2",
+      "discriminator": [
+        140,
+        11,
+        185,
+        155,
+        26,
+        142,
+        21,
+        45
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "takeover"
+          ]
+        },
+        {
+          "name": "contributor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "takeover",
+          "writable": true
+        },
+        {
+          "name": "contributor_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "takeover"
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "v2_mint",
+          "writable": true
+        },
+        {
+          "name": "contributor_ata",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "contribute",
+      "discriminator": [
+        82,
+        33,
+        68,
+        131,
+        32,
+        0,
+        205,
+        95
+      ],
+      "accounts": [
+        {
+          "name": "contributor",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "takeover",
+          "writable": true
+        },
+        {
+          "name": "contributor_ata",
+          "writable": true
+        },
+        {
+          "name": "vault",
+          "writable": true
+        },
+        {
+          "name": "contributor_account",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  116,
+                  114,
+                  105,
+                  98,
+                  117,
+                  116,
+                  111,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "takeover"
+              },
+              {
+                "kind": "account",
+                "path": "contributor"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "finalize_takeover",
+      "discriminator": [
+        237,
+        226,
+        215,
+        181,
+        203,
+        65,
+        244,
+        223
+      ],
+      "accounts": [
+        {
+          "name": "takeover",
+          "writable": true
+        },
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true,
+          "relations": [
+            "takeover"
+          ]
+        },
+        {
+          "name": "v2_mint",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "initialize",
+      "discriminator": [
+        175,
+        175,
+        109,
+        31,
+        13,
+        152,
+        155,
+        237
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "treasury",
+          "writable": true
+        },
+        {
+          "name": "v1_token_mint"
+        },
+        {
+          "name": "takeover",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  116,
+                  97,
+                  107,
+                  101,
+                  111,
+                  118,
+                  101,
+                  114
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              },
+              {
+                "kind": "account",
+                "path": "v1_token_mint"
+              }
+            ]
+          }
+        },
+        {
+          "name": "vault",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "rent",
+          "address": "SysvarRent111111111111111111111111111111111"
+        }
+      ],
+      "args": [
+        {
+          "name": "min_amount",
+          "type": "u64"
+        },
+        {
+          "name": "duration",
+          "type": "i64"
+        },
+        {
+          "name": "custom_reward_rate",
+          "type": "f64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "ContributorData",
+      "discriminator": [
+        54,
+        57,
+        122,
+        25,
+        133,
+        153,
+        10,
+        238
+      ]
+    },
+    {
+      "name": "Takeover",
+      "discriminator": [
+        184,
+        159,
+        48,
+        202,
+        162,
+        219,
+        67,
+        141
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "ContributionMade",
+      "discriminator": [
+        81,
+        218,
+        72,
+        109,
+        93,
+        96,
+        131,
+        199
+      ]
+    },
+    {
+      "name": "RewardsClaimed",
+      "discriminator": [
+        75,
+        98,
+        88,
+        18,
+        219,
+        112,
+        88,
+        121
+      ]
+    },
+    {
+      "name": "TakeoverFinalized",
+      "discriminator": [
+        166,
+        83,
+        110,
+        5,
+        154,
+        47,
+        140,
+        17
+      ]
+    },
+    {
+      "name": "TakeoverInitialized",
+      "discriminator": [
+        75,
+        113,
+        167,
+        243,
+        226,
+        214,
+        27,
+        168
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "AlreadyFinalized",
+      "msg": "The takeover has already been finalized"
+    },
+    {
+      "code": 6001,
+      "name": "NotFinalized",
+      "msg": "The takeover has not been finalized yet"
+    },
+    {
+      "code": 6002,
+      "name": "TakeoverExpired",
+      "msg": "The takeover has expired"
+    },
+    {
+      "code": 6003,
+      "name": "TooEarly",
+      "msg": "The takeover is still active"
+    },
+    {
+      "code": 6004,
+      "name": "InsufficientFunds",
+      "msg": "Insufficient funds"
+    },
+    {
+      "code": 6005,
+      "name": "InvalidAmount",
+      "msg": "Invalid amount"
+    },
+    {
+      "code": 6006,
+      "name": "InvalidVault",
+      "msg": "Invalid vault"
+    },
+    {
+      "code": 6007,
+      "name": "InvalidMint",
+      "msg": "Invalid mint"
+    },
+    {
+      "code": 6008,
+      "name": "InvalidTokenAccount",
+      "msg": "Invalid token account"
+    },
+    {
+      "code": 6009,
+      "name": "NotAuthorized",
+      "msg": "Not authorized"
+    },
+    {
+      "code": 6010,
+      "name": "AlreadyClaimed",
+      "msg": "Rewards already claimed"
+    },
+    {
+      "code": 6011,
+      "name": "NoV2Mint",
+      "msg": "No V2 mint has been created"
+    },
+    {
+      "code": 6012,
+      "name": "NumericalOverflow",
+      "msg": "Numerical overflow"
+    },
+    {
+      "code": 6013,
+      "name": "InvalidTreasury",
+      "msg": "Invalid treasury address"
+    }
+  ],
+  "types": [
+    {
+      "name": "ContributionMade",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "takeover",
+            "type": "pubkey"
+          },
+          {
+            "name": "contributor",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "total_contributed",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ContributorData",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "wallet",
+            "type": "pubkey"
+          },
+          {
+            "name": "takeover",
+            "type": "pubkey"
+          },
+          {
+            "name": "contribution",
+            "type": "u64"
+          },
+          {
+            "name": "airdrop_amount",
+            "type": "u64"
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "RewardsClaimed",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "takeover",
+            "type": "pubkey"
+          },
+          {
+            "name": "contributor",
+            "type": "pubkey"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "is_refund",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Takeover",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "v1_token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "vault",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "start_time",
+            "type": "i64"
+          },
+          {
+            "name": "end_time",
+            "type": "i64"
+          },
+          {
+            "name": "total_contributed",
+            "type": "u64"
+          },
+          {
+            "name": "contributor_count",
+            "type": "u64"
+          },
+          {
+            "name": "is_finalized",
+            "type": "bool"
+          },
+          {
+            "name": "is_successful",
+            "type": "bool"
+          },
+          {
+            "name": "has_v2_mint",
+            "type": "bool"
+          },
+          {
+            "name": "v2_token_mint",
+            "type": "pubkey"
+          },
+          {
+            "name": "v2_total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "custom_reward_rate",
+            "type": "f64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "TakeoverFinalized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "takeover",
+            "type": "pubkey"
+          },
+          {
+            "name": "is_successful",
+            "type": "bool"
+          },
+          {
+            "name": "total_contributed",
+            "type": "u64"
+          },
+          {
+            "name": "v2_mint",
+            "type": {
+              "option": "pubkey"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "TakeoverInitialized",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "takeover",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "end_time",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ]
+}
