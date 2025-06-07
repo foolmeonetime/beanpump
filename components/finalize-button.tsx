@@ -1,4 +1,4 @@
-// components/finalize-button.tsx - Corrected version
+// components/finalize-button.tsx - Fixed version with PDA for V2 mint
 "use client";
 
 import { useState } from "react";
@@ -9,8 +9,6 @@ import { useToast } from "@/components/ui/use-toast";
 import { 
   PublicKey, 
   Transaction, 
-  Keypair,
-  SystemProgram,
   TransactionInstruction
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
@@ -23,9 +21,6 @@ interface FinalizeButtonProps {
   isReadyToFinalize: boolean;
   onFinalized?: () => void;
 }
-
-// Constants for mint creation
-const MINT_SIZE = 82;
 
 export function FinalizeButton({ 
   takeoverAddress, 
@@ -48,47 +43,33 @@ export function FinalizeButton({
     return null;
   }
 
-  const createV2TokenMint = async (mintKeypair: Keypair, authority: PublicKey) => {
-    const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
-    
-    const createAccountIx = SystemProgram.createAccount({
-      fromPubkey: authority,
-      newAccountPubkey: mintKeypair.publicKey,
-      space: MINT_SIZE,
-      lamports: rentExemptBalance,
-      programId: TOKEN_PROGRAM_ID,
-    });
-
-    const initializeMintData = Buffer.alloc(67);
-    initializeMintData.writeUInt8(0, 0); // Initialize mint instruction
-    initializeMintData.writeUInt8(6, 1); // 6 decimals
-    authority.toBuffer().copy(initializeMintData, 2); // Mint authority
-    initializeMintData.writeUInt8(1, 34); // Has freeze authority
-    authority.toBuffer().copy(initializeMintData, 35); // Freeze authority
-
-    const initializeMintIx = new TransactionInstruction({
-      keys: [
-        { pubkey: mintKeypair.publicKey, isSigner: false, isWritable: true },
-        { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
+  // Function to derive V2 mint PDA (this should match your Rust program logic)
+  const findV2MintPDA = (takeover: PublicKey, programId: PublicKey): PublicKey => {
+    const [pda] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("v2_mint"),
+        takeover.toBuffer()
       ],
-      programId: TOKEN_PROGRAM_ID,
-      data: initializeMintData,
-    });
-
-    return [createAccountIx, initializeMintIx];
+      programId
+    );
+    return pda;
   };
 
-  const createFinalizeInstruction = (takeover: PublicKey, authority: PublicKey, v2Mint: PublicKey) => {
-    const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+  const createFinalizeInstruction = (
+    takeover: PublicKey, 
+    authority: PublicKey, 
+    v2Mint: PublicKey, 
+    programId: PublicKey
+  ) => {
     const discriminator = Buffer.from([237, 226, 215, 181, 203, 65, 244, 223]);
     
     return new TransactionInstruction({
       keys: [
         { pubkey: takeover, isSigner: false, isWritable: true },
         { pubkey: authority, isSigner: true, isWritable: true },
-        { pubkey: v2Mint, isSigner: true, isWritable: true },
+        { pubkey: v2Mint, isSigner: false, isWritable: true }, // Changed to NOT signer since it's a PDA
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+        { pubkey: new PublicKey("11111111111111111111111111111111"), isSigner: false, isWritable: false },
         { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
       ],
       programId,
@@ -97,10 +78,8 @@ export function FinalizeButton({
   };
 
   const handleFinalize = async () => {
-    // 🔍 ADD DEBUG LOGS AT THE START:
     console.log("🔍 FINALIZE DEBUG:");
     console.log("Environment PROGRAM_ID:", process.env.NEXT_PUBLIC_PROGRAM_ID);
-    console.log("RPC URL:", process.env.NEXT_PUBLIC_SOLANA_RPC_URL);
     console.log("Takeover address:", takeoverAddress);
     console.log("Is goal met:", isGoalMet);
     
@@ -127,79 +106,106 @@ export function FinalizeButton({
       setFinalizing(true);
       
       const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
-      console.log("🔍 Program ID being used:", programId.toString());
-      
       const takeoverPubkey = new PublicKey(takeoverAddress);
+      
       console.log(`🎯 Finalizing takeover: ${takeoverAddress} (${isGoalMet ? 'Success' : 'Failed'})`);
       
-      let transaction: Transaction;
-      let v2MintKeypair: Keypair | null = null;
-      let v2TokenMint: string | null = null;
+      let v2TokenMint: string;
       
       if (isGoalMet) {
-        // Create V2 mint for successful takeovers
-        console.log('💎 Creating V2 mint for successful takeover...');
+        // For successful takeovers, derive V2 mint PDA
+        console.log('💎 Deriving V2 mint PDA for successful takeover...');
+        const v2MintPDA = findV2MintPDA(takeoverPubkey, programId);
+        v2TokenMint = v2MintPDA.toBase58();
         
-        v2MintKeypair = Keypair.generate();
-        v2TokenMint = v2MintKeypair.publicKey.toBase58();
+        console.log('📍 V2 Mint PDA:', v2TokenMint);
         
-        const [createAccountIx, initializeMintIx] = await createV2TokenMint(v2MintKeypair, publicKey);
-        const finalizeIx = createFinalizeInstruction(takeoverPubkey, publicKey, v2MintKeypair.publicKey);
+        // Create finalize instruction with PDA
+        const finalizeIx = createFinalizeInstruction(
+          takeoverPubkey, 
+          publicKey, 
+          v2MintPDA, 
+          programId
+        );
         
-        transaction = new Transaction().add(createAccountIx, initializeMintIx, finalizeIx);
+        const transaction = new Transaction().add(finalizeIx);
+        transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        transaction.feePayer = publicKey;
+        
+        // Sign transaction (no need to sign with V2 mint since it's a PDA)
+        console.log('🔐 Signing transaction...');
+        const signedTransaction = await signTransaction(transaction);
+        
+        // Send transaction
+        console.log('📤 Sending finalization transaction...');
+        const signature = await connection.sendRawTransaction(signedTransaction.serialize());
+        
+        // Wait for confirmation
+        console.log('⏳ Waiting for confirmation...', signature);
+        await connection.confirmTransaction(signature, 'confirmed');
+        
+        console.log('✅ Transaction confirmed, recording in database...');
+        
+        // Record finalization in database
+        const recordResponse = await fetch('/api/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            takeoverAddress,
+            authority: publicKey.toString(),
+            transactionSignature: signature,
+            v2TokenMint,
+            isSuccessful: true
+          })
+        });
+        
+        if (!recordResponse.ok) {
+          throw new Error('Failed to record finalization in database');
+        }
+        
+        const recordData = await recordResponse.json();
+        
+        if (!recordData.success) {
+          throw new Error(recordData.error);
+        }
         
       } else {
-        // For failed takeovers, use authority as dummy v2_mint
+        // For failed takeovers, use authority as v2_mint (dummy value)
         console.log('❌ Finalizing failed takeover...');
+        v2TokenMint = publicKey.toString(); // Using authority as dummy
         
-        const finalizeIx = createFinalizeInstruction(takeoverPubkey, publicKey, publicKey);
-        transaction = new Transaction().add(finalizeIx);
-      }
-      
-      // Set transaction details
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      transaction.feePayer = publicKey;
-      
-      // Sign transaction
-      console.log('🔐 Signing transaction...');
-      const signedTransaction = await signTransaction(transaction);
-      
-      // Add v2 mint signature if needed
-      if (v2MintKeypair) {
-        signedTransaction.partialSign(v2MintKeypair);
-      }
-      
-      // Send transaction
-      console.log('📤 Sending finalization transaction...');
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize());
-      
-      // Wait for confirmation
-      console.log('⏳ Waiting for confirmation...', signature);
-      await connection.confirmTransaction(signature, 'confirmed');
-      
-      console.log('✅ Transaction confirmed, recording in database...');
-      
-      // Record finalization in database
-      const recordResponse = await fetch('/api/finalize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          takeoverAddress,
-          authority: publicKey.toString(),
-          transactionSignature: signature,
-          v2TokenMint,
-          isSuccessful: isGoalMet
-        })
-      });
-      
-      if (!recordResponse.ok) {
-        throw new Error('Failed to record finalization in database');
-      }
-      
-      const recordData = await recordResponse.json();
-      
-      if (!recordData.success) {
-        throw new Error(recordData.error);
+        const finalizeIx = createFinalizeInstruction(
+          takeoverPubkey, 
+          publicKey, 
+          publicKey, // Use authority as dummy v2_mint for failed takeovers
+          programId
+        );
+        
+        const transaction = new Transaction().add(finalizeIx);
+        transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+        transaction.feePayer = publicKey;
+        
+        // Sign and send transaction
+        const signedTransaction = await signTransaction(transaction);
+        const signature = await connection.sendRawTransaction(signedTransaction.serialize());
+        await connection.confirmTransaction(signature, 'confirmed');
+        
+        // Record in database
+        const recordResponse = await fetch('/api/finalize', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            takeoverAddress,
+            authority: publicKey.toString(),
+            transactionSignature: signature,
+            v2TokenMint: null, // No V2 mint for failed takeovers
+            isSuccessful: false
+          })
+        });
+        
+        if (!recordResponse.ok) {
+          throw new Error('Failed to record finalization in database');
+        }
       }
       
       toast({
