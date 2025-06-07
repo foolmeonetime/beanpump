@@ -6,7 +6,6 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useToast } from "@/components/ui/use-toast";
-import { ImageGallery } from "@/components/image-gallery";
 
 interface ImageUploadProps {
   onImageUploaded: (imageUrl: string) => void;
@@ -144,11 +143,51 @@ export function ImageUpload({ onImageUploaded, currentImageUrl, label = "Token I
             </div>
           </div>
           
-          {/* Template Gallery */}
-          <ImageGallery onImageSelect={(imageUrl) => {
-            setPreview(imageUrl);
-            onImageUploaded(imageUrl);
-          }} />
+          {/* Simple Template Gallery */}
+          <div className="space-y-2">
+            <p className="text-sm font-medium">Or choose a quick template:</p>
+            <div className="grid grid-cols-8 gap-2">
+              {["🟠", "🔵", "🟢", "🟡", "🟣", "🔴", "🍎", "🍊", "🍋", "🍌", "🍇", "🍓", "🚀", "⭐", "💎", "🔥"].map((emoji, index) => (
+                <button
+                  key={index}
+                  type="button"
+                    onClick={() => {
+                      // Create simple emoji image
+                      const canvas = document.createElement('canvas');
+                      canvas.width = 200;
+                      canvas.height = 200;
+                      const ctx = canvas.getContext('2d');
+                      
+                      if (ctx) {
+                        // Gradient background
+                        const gradient = ctx.createLinearGradient(0, 0, 200, 200);
+                        gradient.addColorStop(0, '#8B5CF6');
+                        gradient.addColorStop(1, '#EC4899');
+                        
+                        ctx.fillStyle = gradient;
+                        ctx.beginPath();
+                        ctx.arc(100, 100, 100, 0, 2 * Math.PI);
+                        ctx.fill();
+                        
+                        // Add emoji
+                        ctx.font = '80px serif';
+                        ctx.textAlign = 'center';
+                        ctx.textBaseline = 'middle';
+                        ctx.fillText(emoji, 100, 100);
+                        
+                        const dataUrl: string = canvas.toDataURL();
+                        setPreview(dataUrl);
+                        onImageUploaded(dataUrl);
+                      }
+                    }}
+                  className="w-10 h-10 rounded-lg border hover:border-purple-300 hover:bg-purple-50 transition-colors flex items-center justify-center text-lg"
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500">Click any icon to create a token image template</p>
+          </div>
         </div>
       ) : (
         <div className="space-y-4">
