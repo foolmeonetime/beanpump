@@ -17,6 +17,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { WalletMultiButton } from "@/components/wallet-multi-button";
+import { FinalizeButton } from "@/components/finalize-button"; // 🔥 ADD THIS IMPORT
 import { PROGRAM_ID } from "@/lib/constants";
 import { useParams } from "next/navigation";
 import Link from "next/link";
@@ -41,7 +42,7 @@ interface Takeover {
   progressPercentage: number;
   created_at: string;
   tokenName: string;
-  imageUrl?: string; // Add image URL
+  imageUrl?: string;
 }
 
 // Helper function to create ATA instruction if needed
@@ -65,11 +66,12 @@ function createAssociatedTokenAccountInstructionLegacy(
     data: Buffer.from([]),
   });
 }
+
 // Helper function to get associated token address
 function getAssociatedTokenAddressLegacy(mint: PublicKey, owner: PublicKey): PublicKey {
   const [address] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL") // Associated Token Program
+    new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
   );
   return address;
 }
@@ -84,29 +86,19 @@ function createContributeInstruction(
   contributorAccount: PublicKey,
   amount: bigint
 ): TransactionInstruction {
-  // Create instruction data buffer
-  // For Anchor "contribute" instruction from your IDL
-  // Discriminator: [82, 33, 68, 131, 32, 0, 205, 95]
   const discriminator = Buffer.from([82, 33, 68, 131, 32, 0, 205, 95]);
-  
-  // Serialize the amount parameter as u64 little-endian
   const amountBuffer = Buffer.alloc(8);
   amountBuffer.writeBigUInt64LE(amount, 0);
-  
-  const data = Buffer.concat([
-    discriminator,
-    amountBuffer
-  ]);
+  const data = Buffer.concat([discriminator, amountBuffer]);
 
-  // Account order must match exactly what's in your Anchor program's #[derive(Accounts)]
   const keys = [
-    { pubkey: contributor, isSigner: true, isWritable: true },        // contributor
-    { pubkey: takeover, isSigner: false, isWritable: true },         // takeover
-    { pubkey: contributorAta, isSigner: false, isWritable: true },   // contributor_ata
-    { pubkey: vault, isSigner: false, isWritable: true },            // vault
-    { pubkey: contributorAccount, isSigner: false, isWritable: true }, // contributor_account
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
+    { pubkey: contributor, isSigner: true, isWritable: true },
+    { pubkey: takeover, isSigner: false, isWritable: true },
+    { pubkey: contributorAta, isSigner: false, isWritable: true },
+    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: contributorAccount, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
   ];
 
   return new TransactionInstruction({
@@ -118,7 +110,7 @@ function createContributeInstruction(
 
 export default function Page() {
   const params = useParams();
-  const takeoverAddress = params.id as string; // Changed from params.address to params.id
+  const takeoverAddress = params.id as string;
   
   console.log("=== PAGE DEBUG INFO ===");
   console.log("Raw params:", params);
@@ -138,6 +130,16 @@ export default function Page() {
   const [userTokenBalance, setUserTokenBalance] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
 
+  // 🔥 ADD THESE HELPER FUNCTIONS FOR FINALIZATION LOGIC
+  const now = Math.floor(Date.now() / 1000);
+  const endTime = takeover ? parseInt(takeover.endTime) : 0;
+  const isActive = takeover?.status === 'active' && now < endTime;
+  const isGoalMet = takeover ? BigInt(takeover.totalContributed) >= BigInt(takeover.minAmount) : false;
+  const isExpired = now >= endTime;
+  const isReadyToFinalize = takeover && !takeover.isFinalized && (isGoalMet || isExpired);
+  const isAuthority = takeover && publicKey && takeover.authority === publicKey.toString();
+  const canContribute = isActive && !takeover?.isFinalized && publicKey;
+
   // Fetch takeover details
   const fetchTakeoverDetails = async () => {
     try {
@@ -154,12 +156,10 @@ export default function Page() {
       const data = await response.json();
       console.log("API response:", data);
       
-      // Check if data has the expected structure
       if (!data) {
         throw new Error('No data received from API');
       }
       
-      // Handle different possible response structures
       let takeovers = data.takeovers || data || [];
       
       if (!Array.isArray(takeovers)) {
@@ -197,7 +197,7 @@ export default function Page() {
       const accountInfo = await connection.getAccountInfo(userAta);
       if (accountInfo) {
         const balance = await connection.getTokenAccountBalance(userAta);
-        setUserTokenBalance(Number(balance.value.amount) / 1_000_000); // Assuming 6 decimals
+        setUserTokenBalance(Number(balance.value.amount) / 1_000_000);
       } else {
         setUserTokenBalance(0);
       }
@@ -240,28 +240,21 @@ export default function Page() {
         throw new Error(`Insufficient balance. You have ${userTokenBalance} tokens`);
       }
       
-      // Convert to smallest units (6 decimals)
       const amountLamports = BigInt(amount * 1_000_000);
-      
       console.log("2. Contribution amount:", amount, "tokens ->", amountLamports.toString(), "lamports");
       
-      // Get required addresses
       const takeoverPubkey = new PublicKey(takeover.address);
       const tokenMint = new PublicKey(takeover.v1_token_mint);
       const vault = new PublicKey(takeover.vault);
-      
-      // Get user's associated token account
       const contributorAta = getAssociatedTokenAddressLegacy(tokenMint, publicKey);
+      
       console.log("3. Contributor ATA:", contributorAta.toString());
       
-      // Check if ATA exists, create if needed
       const ataAccountInfo = await connection.getAccountInfo(contributorAta);
       console.log("4. ATA exists:", !!ataAccountInfo);
       
-      // Build transaction
       const transaction = new Transaction();
       
-      // Add ATA creation instruction if needed
       if (!ataAccountInfo) {
         console.log("5. Adding ATA creation instruction");
         const createAtaIx = createAssociatedTokenAccountInstructionLegacy(
@@ -273,7 +266,6 @@ export default function Page() {
         transaction.add(createAtaIx);
       }
       
-      // Find contributor PDA
       const [contributorAccount, contributorBump] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("contributor"),
@@ -285,13 +277,11 @@ export default function Page() {
       
       console.log("6. Contributor PDA:", contributorAccount.toString(), "bump:", contributorBump);
       
-      // Check if contributor account already exists
       const contributorAccountInfo = await connection.getAccountInfo(contributorAccount);
       if (contributorAccountInfo) {
         throw new Error("You have already contributed to this takeover. Multiple contributions are not currently supported.");
       }
       
-      // Create contribute instruction
       const contributeIx = createContributeInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
@@ -303,17 +293,6 @@ export default function Page() {
       );
       
       console.log("7. Contribute instruction created");
-      console.log("8. Instruction details:", {
-        programId: PROGRAM_ID,
-        accounts: contributeIx.keys.map(k => ({
-          pubkey: k.pubkey.toString(),
-          isSigner: k.isSigner,
-          isWritable: k.isWritable
-        })),
-        dataLength: contributeIx.data.length
-      });
-      
-      // Add contribute instruction to transaction
       transaction.add(contributeIx);
       
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
@@ -322,7 +301,6 @@ export default function Page() {
       
       console.log("9. Transaction built, simulating first...");
       
-      // Simulate transaction first to catch errors early
       try {
         const simulation = await connection.simulateTransaction(transaction);
         console.log("10. Simulation result:", simulation);
@@ -348,7 +326,6 @@ export default function Page() {
       
       console.log("16. Transaction sent, signature:", signature);
       
-      // Wait for confirmation
       const confirmation = await connection.confirmTransaction({
         signature,
         blockhash,
@@ -361,7 +338,6 @@ export default function Page() {
       
       console.log("17. Transaction confirmed!");
       
-      // 🔥 Save contribution to database after successful blockchain transaction
       try {
         console.log("18. Saving contribution to database...");
         const dbResponse = await fetch('/api/contributions', {
@@ -370,7 +346,7 @@ export default function Page() {
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            takeoverId: takeover.id, // Use the database ID
+            takeoverId: takeover.id,
             amount: amountLamports.toString(),
             contributor: publicKey.toString(),
             transactionSignature: signature
@@ -387,8 +363,6 @@ export default function Page() {
         
       } catch (dbError) {
         console.error("Database save error:", dbError);
-        // Don't fail the entire operation for database errors
-        // The blockchain transaction succeeded, which is most important
         toast({
           title: "Partial Success",
           description: "Contribution successful on blockchain but failed to save to database. Check console for details.",
@@ -402,7 +376,6 @@ export default function Page() {
         duration: 10000
       });
 
-      // Refresh data
       setContributionAmount("");
       fetchTakeoverDetails();
       fetchUserBalance();
@@ -443,11 +416,6 @@ export default function Page() {
       </div>
     );
   }
-
-  const now = Math.floor(Date.now() / 1000);
-  const endTime = parseInt(takeover.endTime);
-  const isActive = takeover.status === 'active' && now < endTime;
-  const canContribute = isActive && !takeover.isFinalized && publicKey;
 
   // Format time remaining
   let timeLeft = "";
@@ -524,7 +492,7 @@ export default function Page() {
             <Progress value={takeover.progressPercentage} className="h-3" />
             <div className="flex justify-between text-xs text-gray-500">
               <span>{takeover.progressPercentage.toFixed(1)}% complete</span>
-                              <span>Goal: {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
+              <span>Goal: {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
             </div>
           </div>
 
@@ -562,6 +530,33 @@ export default function Page() {
               </div>
             </div>
           </div>
+
+          {/* 🔥 ADD FINALIZATION SECTION HERE */}
+          {isReadyToFinalize && isAuthority && (
+            <div className="border-t pt-4">
+              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                <h3 className="font-medium text-yellow-800 mb-2">⚡ Ready to Finalize</h3>
+                <p className="text-sm text-yellow-700 mb-4">
+                  Your takeover is ready to be finalized! 
+                  {isGoalMet 
+                    ? " 🎉 The funding goal has been reached - contributors will receive V2 tokens."
+                    : " ⏰ The time limit has expired - contributors will receive refunds."
+                  }
+                </p>
+                <FinalizeButton
+                  takeoverAddress={takeover.address}
+                  takeoverAuthority={takeover.authority}
+                  tokenName={takeover.tokenName}
+                  isGoalMet={isGoalMet}
+                  isReadyToFinalize={true}
+                  onFinalized={() => {
+                    // Refresh the takeover data after finalization
+                    fetchTakeoverDetails();
+                  }}
+                />
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
