@@ -1,3 +1,4 @@
+// Updated takeovers-list.tsx - Manual finalization version
 "use client"
 
 import { useEffect, useState } from "react"
@@ -5,6 +6,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
 import { LoadingSpinner } from "@/components/loading-spinner"
+import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
 
 interface Takeover {
@@ -27,34 +29,63 @@ interface Takeover {
   progressPercentage: number;
   created_at: string;
   tokenName: string;
-  imageUrl?: string; // Add image URL
+  imageUrl?: string;
+  finalize_tx?: string;
 }
 
 export function TakeoversList() {
   const [takeovers, setTakeovers] = useState<Takeover[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [debugMode, setDebugMode] = useState(false)
+  const { toast } = useToast()
 
   const fetchTakeovers = async () => {
     try {
       setLoading(true)
       setError(null)
       
+      console.log('🔄 Fetching takeovers...')
+      
       const response = await fetch('/api/takeovers', {
         method: 'GET',
-        headers: { 'Content-Type': 'application/json' }
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store'
       })
       
       if (!response.ok) {
-        throw new Error('Failed to fetch takeovers')
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
       }
       
       const data = await response.json()
+      console.log('📊 Received takeovers data:', data)
+      
+      if (!data.takeovers || !Array.isArray(data.takeovers)) {
+        throw new Error('Invalid response format: missing takeovers array')
+      }
+      
       setTakeovers(data.takeovers || [])
       
+      // Log debug info
+      const now = Math.floor(Date.now() / 1000)
+      const readyCount = data.takeovers.filter((t: Takeover) => {
+        if (t.isFinalized) return false
+        const endTime = parseInt(t.endTime)
+        const totalContributed = BigInt(t.totalContributed)
+        const minAmount = BigInt(t.minAmount)
+        return totalContributed >= minAmount || now >= endTime
+      }).length
+      
+      console.log(`✅ Loaded ${data.takeovers.length} takeovers, ${readyCount} ready for finalization`)
+      
     } catch (error: any) {
-      console.error('Error fetching takeovers:', error)
+      console.error('❌ Error fetching takeovers:', error)
       setError(error.message)
+      toast({
+        title: "Error Loading Takeovers",
+        description: error.message,
+        variant: "destructive"
+      })
     } finally {
       setLoading(false)
     }
@@ -62,6 +93,12 @@ export function TakeoversList() {
 
   useEffect(() => {
     fetchTakeovers()
+  }, [])
+
+  // Auto-refresh every 30 seconds
+  useEffect(() => {
+    const interval = setInterval(fetchTakeovers, 30000)
+    return () => clearInterval(interval)
   }, [])
 
   if (loading) {
@@ -80,7 +117,17 @@ export function TakeoversList() {
           <CardContent className="pt-6">
             <h3 className="text-xl font-medium mb-2 text-red-600">Error Loading Takeovers</h3>
             <p className="text-gray-500 mb-4">{error}</p>
-            <Button onClick={fetchTakeovers}>Retry</Button>
+            <div className="space-x-2">
+              <Button onClick={fetchTakeovers}>Retry</Button>
+              <Button variant="outline" onClick={() => setDebugMode(!debugMode)}>
+                {debugMode ? 'Hide' : 'Show'} Debug
+              </Button>
+            </div>
+            {debugMode && (
+              <div className="mt-4 p-4 bg-gray-100 rounded text-left text-sm">
+                <pre>{JSON.stringify({ error, timestamp: new Date().toISOString() }, null, 2)}</pre>
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -105,17 +152,90 @@ export function TakeoversList() {
     )
   }
 
+  // Count different statuses for debugging
+  const now = Math.floor(Date.now() / 1000)
+  const statusCounts = {
+    finalized: takeovers.filter(t => t.isFinalized).length,
+    successful: takeovers.filter(t => t.isFinalized && t.isSuccessful).length,
+    failed: takeovers.filter(t => t.isFinalized && !t.isSuccessful).length,
+    readyToFinalize: takeovers.filter(t => {
+      if (t.isFinalized) return false
+      const endTime = parseInt(t.endTime)
+      const totalContributed = BigInt(t.totalContributed)
+      const minAmount = BigInt(t.minAmount)
+      return totalContributed >= minAmount || now >= endTime
+    }).length,
+    active: takeovers.filter(t => !t.isFinalized && t.status === 'active').length
+  }
+
   return (
     <div className="w-full max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold">Takeover Campaigns</h2>
         <div className="flex items-center gap-4">
           <span className="text-sm text-gray-500">{takeovers.length} campaign{takeovers.length !== 1 ? 's' : ''}</span>
+          <Button onClick={() => setDebugMode(!debugMode)} variant="ghost" size="sm">
+            🐛 Debug
+          </Button>
           <Button onClick={fetchTakeovers} variant="outline" size="sm">
             Refresh
           </Button>
         </div>
       </div>
+
+      {/* Manual Finalization Info */}
+      {statusCounts.readyToFinalize > 0 && (
+        <Card className="mb-6 border-yellow-200 bg-yellow-50">
+          <CardHeader>
+            <CardTitle className="text-lg">⚡ Manual Finalization Required</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-gray-600 mb-4">
+              {statusCounts.readyToFinalize} takeover{statusCounts.readyToFinalize !== 1 ? 's' : ''} ready for finalization. 
+              Takeover creators must manually finalize their campaigns when they're ready.
+            </p>
+            <div className="text-xs text-gray-500">
+              💡 Each takeover can only be finalized by its creator (the authority who initialized it).
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Debug Info Panel */}
+      {debugMode && (
+        <Card className="mb-6 border-yellow-200 bg-yellow-50">
+          <CardHeader>
+            <CardTitle className="text-lg">🐛 Debug Information</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 text-sm">
+              <div>
+                <div className="font-medium">Total</div>
+                <div className="text-lg">{takeovers.length}</div>
+              </div>
+              <div>
+                <div className="font-medium">Active</div>
+                <div className="text-lg text-green-600">{statusCounts.active}</div>
+              </div>
+              <div>
+                <div className="font-medium">Ready to Finalize</div>
+                <div className="text-lg text-yellow-600">{statusCounts.readyToFinalize}</div>
+              </div>
+              <div>
+                <div className="font-medium">Successful</div>
+                <div className="text-lg text-green-600">{statusCounts.successful}</div>
+              </div>
+              <div>
+                <div className="font-medium">Failed</div>
+                <div className="text-lg text-red-600">{statusCounts.failed}</div>
+              </div>
+            </div>
+            <div className="mt-4 text-xs text-gray-600">
+              Current timestamp: {now} ({new Date().toLocaleString()})
+            </div>
+          </CardContent>
+        </Card>
+      )}
       
       <div className="grid gap-6">
         {takeovers.map((takeover) => {
@@ -148,8 +268,10 @@ export function TakeoversList() {
               timeLeft = `${days}d ${hours}h remaining`
             } else if (hours > 0) {
               timeLeft = `${hours}h ${minutes}m remaining`
-            } else {
+            } else if (minutes > 0) {
               timeLeft = `${minutes}m remaining`
+            } else {
+              timeLeft = "⏰ Ending soon"
             }
             statusColor = "bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200"
           } else {
@@ -183,6 +305,14 @@ export function TakeoversList() {
                         Token: {takeover.tokenName}
                         <br />
                         <span className="font-mono text-xs">{takeover.v1_token_mint.slice(0, 8)}...{takeover.v1_token_mint.slice(-4)}</span>
+                        {debugMode && (
+                          <div className="text-xs mt-1">
+                            ID: {takeover.id} | Status: {takeover.status} | Authority: {takeover.authority.slice(0, 4)}...
+                            {takeover.finalize_tx && (
+                              <div>Finalize TX: {takeover.finalize_tx.slice(0, 8)}...</div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -232,13 +362,29 @@ export function TakeoversList() {
                       <div className="text-sm font-medium">{takeover.customRewardRate}x</div>
                     </div>
                   </div>
+
+                  {/* V2 Token Info for Successful Takeovers */}
+                  {isFinalized && takeover.isSuccessful && takeover.v2TokenMint && (
+                    <div className="bg-green-50 border border-green-200 p-3 rounded-lg">
+                      <div className="text-sm font-medium text-green-800 mb-1">V2 Token Created</div>
+                      <div className="text-xs font-mono text-green-600">
+                        {takeover.v2TokenMint}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
               
               <CardFooter>
                 {isFinalized ? (
                   <Link href={`/claim/${takeover.address}`} className="w-full">
-                    <Button variant="outline" className="w-full hover:bg-green-50 hover:border-green-300">
+                    <Button 
+                      variant="outline" 
+                      className={`w-full ${takeover.isSuccessful 
+                        ? 'hover:bg-green-50 hover:border-green-300' 
+                        : 'hover:bg-red-50 hover:border-red-300'
+                      }`}
+                    >
                       {takeover.isSuccessful ? "🎉 Claim V2 Tokens" : "💰 Claim Refund"}
                     </Button>
                   </Link>
