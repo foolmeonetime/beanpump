@@ -26,11 +26,11 @@ interface Takeover {
   imageUrl?: string;
 }
 
-export function useRealtimeTakeovers() {
+export function useSimpleAutoFinalize() {
   const [takeovers, setTakeovers] = useState<Takeover[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [lastFinalizationCheck, setLastFinalizationCheck] = useState<number>(0);
+  const [autoFinalizing, setAutoFinalizing] = useState(false);
   const { toast } = useToast();
 
   const fetchTakeovers = useCallback(async () => {
@@ -68,6 +68,9 @@ export function useRealtimeTakeovers() {
       
       setTakeovers(newTakeovers);
       
+      // Auto-check for finalization after fetching
+      await checkAndAutoFinalize(newTakeovers);
+      
     } catch (error: any) {
       console.error('Error fetching takeovers:', error);
       setError(error.message);
@@ -76,58 +79,12 @@ export function useRealtimeTakeovers() {
     }
   }, [takeovers, toast]);
 
-  const triggerFinalizationCheck = useCallback(async () => {
-    try {
-      const now = Date.now();
-      // Prevent spam clicks - only allow one check per 30 seconds
-      if (now - lastFinalizationCheck < 30000) {
-        return;
-      }
-      
-      setLastFinalizationCheck(now);
-      
-      console.log("🤖 Triggering manual finalization check...");
-      
-      const response = await fetch('/api/auto-finalize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      if (response.ok) {
-        const result = await response.json();
-        
-        if (result.finalized?.length > 0) {
-          toast({
-            title: "🚀 Auto-Finalization Complete",
-            description: `${result.finalized.length} takeover(s) have been finalized and are ready for claiming!`,
-            duration: 6000
-          });
-          
-          // Refresh the takeovers list
-          setTimeout(fetchTakeovers, 1000);
-        } else {
-          toast({
-            title: "✅ All Up to Date",
-            description: "No takeovers needed finalization at this time.",
-            duration: 3000
-          });
-        }
-      }
-      
-    } catch (error: any) {
-      console.error('Finalization check error:', error);
-      toast({
-        title: "❌ Finalization Check Failed",
-        description: "Unable to check for finalization. Please try again.",
-        variant: "destructive"
-      });
-    }
-  }, [lastFinalizationCheck, fetchTakeovers, toast]);
-
-  const checkIfShouldAutoFinalize = useCallback(() => {
+  const checkAndAutoFinalize = useCallback(async (takeoverList: Takeover[]) => {
+    if (autoFinalizing) return; // Prevent multiple simultaneous checks
+    
     const now = Math.floor(Date.now() / 1000);
     
-    const readyForFinalization = takeovers.filter(t => {
+    const readyForFinalization = takeoverList.filter(t => {
       if (t.isFinalized) return false;
       
       const endTime = parseInt(t.endTime);
@@ -138,43 +95,78 @@ export function useRealtimeTakeovers() {
       return totalContributed >= minAmount || now >= endTime;
     });
     
-    if (readyForFinalization.length > 0) {
-      console.log(`🎯 Found ${readyForFinalization.length} takeovers ready for auto-finalization`);
+    if (readyForFinalization.length === 0) return;
+    
+    console.log(`🎯 Found ${readyForFinalization.length} takeovers ready for auto-finalization`);
+    
+    try {
+      setAutoFinalizing(true);
       
-      // Auto-trigger finalization check
-      setTimeout(() => {
-        triggerFinalizationCheck();
-      }, 2000);
+      // Call the auto-finalize API
+      const response = await fetch('/api/auto-finalize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        
+        if (result.finalized?.length > 0) {
+          toast({
+            title: "🚀 Auto-Finalization Complete!",
+            description: `${result.finalized.length} takeover(s) finalized and ready for claiming!`,
+            duration: 6000
+          });
+          
+          // Refresh the takeovers list
+          setTimeout(() => {
+            fetchTakeovers();
+          }, 2000);
+        }
+      }
+      
+    } catch (error: any) {
+      console.error('Auto-finalization error:', error);
+    } finally {
+      setAutoFinalizing(false);
     }
-  }, [takeovers, triggerFinalizationCheck]);
+  }, [autoFinalizing, fetchTakeovers, toast]);
+
+  const manualFinalize = useCallback(async () => {
+    await checkAndAutoFinalize(takeovers);
+  }, [takeovers, checkAndAutoFinalize]);
 
   // Initial fetch
   useEffect(() => {
     fetchTakeovers();
   }, []);
 
-  // Real-time polling every 30 seconds
+  // Auto-check every 30 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       fetchTakeovers();
-    }, 30000);
+    }, 30000); // 30 seconds
 
     return () => clearInterval(interval);
   }, [fetchTakeovers]);
 
-  // Check for auto-finalization whenever takeovers update
-  useEffect(() => {
-    if (takeovers.length > 0) {
-      checkIfShouldAutoFinalize();
-    }
-  }, [takeovers, checkIfShouldAutoFinalize]);
+  // Count ready for finalization
+  const now = Math.floor(Date.now() / 1000);
+  const readyForFinalization = takeovers.filter(t => {
+    if (t.isFinalized) return false;
+    const endTime = parseInt(t.endTime);
+    const totalContributed = BigInt(t.totalContributed);
+    const minAmount = BigInt(t.minAmount);
+    return totalContributed >= minAmount || now >= endTime;
+  }).length;
 
   return {
     takeovers,
     loading,
     error,
+    autoFinalizing,
+    readyForFinalization,
     refetch: fetchTakeovers,
-    triggerFinalizationCheck,
-    lastFinalizationCheck
+    manualFinalize
   };
 }
