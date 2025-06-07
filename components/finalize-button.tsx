@@ -1,4 +1,4 @@
-// components/finalize-button.tsx - Simple finalization button to add to your existing pages
+// components/finalize-button.tsx - Corrected version
 "use client";
 
 import { useState } from "react";
@@ -97,6 +97,23 @@ export function FinalizeButton({
   };
 
   const handleFinalize = async () => {
+    // 🔍 ADD DEBUG LOGS AT THE START:
+    console.log("🔍 FINALIZE DEBUG:");
+    console.log("Environment PROGRAM_ID:", process.env.NEXT_PUBLIC_PROGRAM_ID);
+    console.log("RPC URL:", process.env.NEXT_PUBLIC_SOLANA_RPC_URL);
+    console.log("Takeover address:", takeoverAddress);
+    console.log("Is goal met:", isGoalMet);
+    
+    if (!process.env.NEXT_PUBLIC_PROGRAM_ID) {
+      console.error("❌ NEXT_PUBLIC_PROGRAM_ID is undefined!");
+      toast({
+        title: "Configuration Error", 
+        description: "Program ID not found in environment variables",
+        variant: "destructive"
+      });
+      return;
+    }
+
     if (!publicKey || !signTransaction) {
       toast({
         title: "Wallet Not Connected",
@@ -108,6 +125,9 @@ export function FinalizeButton({
 
     try {
       setFinalizing(true);
+      
+      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
+      console.log("🔍 Program ID being used:", programId.toString());
       
       const takeoverPubkey = new PublicKey(takeoverAddress);
       console.log(`🎯 Finalizing takeover: ${takeoverAddress} (${isGoalMet ? 'Success' : 'Failed'})`);
