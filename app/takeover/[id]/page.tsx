@@ -17,10 +17,198 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { WalletMultiButton } from "@/components/wallet-multi-button";
-import { FinalizeButton } from "@/components/finalize-button"; // 🔥 ADD THIS IMPORT
+import { FinalizeButton } from "@/components/finalize-button";
 import { PROGRAM_ID } from "@/lib/constants";
 import { useParams } from "next/navigation";
 import Link from "next/link";
+
+// Debug Timing Component
+function DebugTiming({ takeoverAddress, frontendTakeover }: { takeoverAddress: string; frontendTakeover: any }) {
+  const { connection } = useConnection();
+  const [onChainData, setOnChainData] = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+
+  const fetchOnChainData = async () => {
+    try {
+      setLoading(true);
+      console.log("🔍 Fetching on-chain takeover data...");
+      
+      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+      const takeoverPubkey = new PublicKey(takeoverAddress);
+      
+      // Get account info
+      const accountInfo = await connection.getAccountInfo(takeoverPubkey);
+      
+      if (!accountInfo) {
+        console.error("❌ Takeover account not found on-chain");
+        return;
+      }
+      
+      console.log("📊 Raw account data length:", accountInfo.data.length);
+      
+      // Parse the account data manually (simplified approach)
+      const data = accountInfo.data;
+      
+      // Skip discriminator (first 8 bytes)
+      let offset = 8;
+      
+      // Read various fields (adjust offsets based on your Rust struct)
+      const authority = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+      
+      const v1TokenMint = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+      
+      const vault = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+      
+      // Read u64 values (8 bytes each, little endian)
+      const minAmount = data.readBigUInt64LE(offset);
+      offset += 8;
+      
+      const startTime = data.readBigInt64LE(offset);
+      offset += 8;
+      
+      const endTime = data.readBigInt64LE(offset);
+      offset += 8;
+      
+      const totalContributed = data.readBigUInt64LE(offset);
+      offset += 8;
+      
+      const contributorCount = data.readBigUInt64LE(offset);
+      offset += 8;
+      
+      // Read boolean flags
+      const isFinalized = data[offset] === 1;
+      offset += 1;
+      
+      const isSuccessful = data[offset] === 1;
+      offset += 1;
+      
+      const hasV2Mint = data[offset] === 1;
+      offset += 1;
+      
+      // Skip padding to align to 8 bytes
+      offset = Math.ceil(offset / 8) * 8;
+      
+      const v2TokenMint = new PublicKey(data.slice(offset, offset + 32));
+      offset += 32;
+      
+      const v2TotalSupply = data.readBigUInt64LE(offset);
+      offset += 8;
+      
+      // Read f64 (8 bytes)
+      const customRewardRate = data.readDoubleLE(offset);
+      offset += 8;
+      
+      const bump = data[offset];
+      
+      const parsed = {
+        authority: authority.toString(),
+        v1TokenMint: v1TokenMint.toString(),
+        vault: vault.toString(),
+        minAmount: minAmount.toString(),
+        startTime: Number(startTime),
+        endTime: Number(endTime),
+        totalContributed: totalContributed.toString(),
+        contributorCount: Number(contributorCount),
+        isFinalized,
+        isSuccessful,
+        hasV2Mint,
+        v2TokenMint: v2TokenMint.toString(),
+        v2TotalSupply: v2TotalSupply.toString(),
+        customRewardRate,
+        bump
+      };
+      
+      setOnChainData(parsed);
+      console.log("✅ Parsed on-chain data:", parsed);
+      
+    } catch (error) {
+      console.error("❌ Error fetching on-chain data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const now = Math.floor(Date.now() / 1000);
+  
+  return (
+    <Card className="mb-6 border-yellow-200 bg-yellow-50">
+      <CardHeader>
+        <CardTitle>🐛 Debug: Timing Mismatch</CardTitle>
+        <CardDescription>
+          The Rust program says "TooEarly" - let's compare frontend vs on-chain data
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <Button onClick={fetchOnChainData} disabled={loading}>
+          {loading ? "Fetching..." : "Fetch On-Chain Data"}
+        </Button>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Frontend Data */}
+          <div className="p-4 border rounded-lg">
+            <h4 className="font-semibold mb-2">📱 Frontend Data</h4>
+            <div className="text-sm space-y-1">
+              <div><strong>Current Time:</strong> {now} ({new Date(now * 1000).toLocaleString()})</div>
+              <div><strong>End Time:</strong> {frontendTakeover.endTime} ({new Date(parseInt(frontendTakeover.endTime) * 1000).toLocaleString()})</div>
+              <div><strong>Is Expired:</strong> {now >= parseInt(frontendTakeover.endTime) ? "✅ Yes" : "❌ No"}</div>
+              <div><strong>Total Contributed:</strong> {(parseInt(frontendTakeover.totalContributed) / 1_000_000).toLocaleString()}</div>
+              <div><strong>Min Amount:</strong> {(parseInt(frontendTakeover.minAmount) / 1_000_000).toLocaleString()}</div>
+              <div><strong>Goal Met:</strong> {BigInt(frontendTakeover.totalContributed) >= BigInt(frontendTakeover.minAmount) ? "✅ Yes" : "❌ No"}</div>
+              <div><strong>Is Finalized:</strong> {frontendTakeover.isFinalized ? "✅ Yes" : "❌ No"}</div>
+            </div>
+          </div>
+          
+          {/* On-Chain Data */}
+          <div className="p-4 border rounded-lg">
+            <h4 className="font-semibold mb-2">⛓️ On-Chain Data</h4>
+            {onChainData ? (
+              <div className="text-sm space-y-1">
+                <div><strong>End Time:</strong> {onChainData.endTime} ({new Date(onChainData.endTime * 1000).toLocaleString()})</div>
+                <div><strong>Is Expired:</strong> {now >= onChainData.endTime ? "✅ Yes" : "❌ No"}</div>
+                <div><strong>Total Contributed:</strong> {(parseInt(onChainData.totalContributed) / 1_000_000).toLocaleString()}</div>
+                <div><strong>Min Amount:</strong> {(parseInt(onChainData.minAmount) / 1_000_000).toLocaleString()}</div>
+                <div><strong>Goal Met:</strong> {BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) ? "✅ Yes" : "❌ No"}</div>
+                <div><strong>Is Finalized:</strong> {onChainData.isFinalized ? "✅ Yes" : "❌ No"}</div>
+              </div>
+            ) : (
+              <div className="text-gray-500">Click "Fetch On-Chain Data" to load</div>
+            )}
+          </div>
+        </div>
+        
+        {/* Analysis */}
+        {onChainData && (
+          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
+            <h4 className="font-semibold text-blue-800 mb-2">📊 Analysis</h4>
+            <div className="text-sm text-blue-700 space-y-1">
+              <div><strong>Time Difference:</strong> {Math.abs(parseInt(frontendTakeover.endTime) - onChainData.endTime)} seconds</div>
+              <div><strong>Contribution Difference:</strong> {Math.abs(parseInt(frontendTakeover.totalContributed) - parseInt(onChainData.totalContributed)) / 1_000_000} tokens</div>
+              
+              {/* Finalization Check */}
+              <div className="mt-2 p-2 bg-white rounded border">
+                <strong>Finalization Requirements (Rust Logic):</strong>
+                <ul className="mt-1 space-y-1">
+                  <li>• Not already finalized: {!onChainData.isFinalized ? "✅" : "❌"}</li>
+                  <li>• Goal reached OR time expired: {
+                    (BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) || now >= onChainData.endTime) ? "✅" : "❌"
+                  }</li>
+                  <li>• Current timestamp ≥ end time: {now >= onChainData.endTime ? "✅" : "❌"} (diff: {now - onChainData.endTime}s)</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
+        
+        <div className="text-xs text-gray-600">
+          💡 If there are discrepancies, the database might be out of sync with blockchain state.
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 interface Takeover {
   id: number;
@@ -129,8 +317,9 @@ export default function Page() {
   const [contributionAmount, setContributionAmount] = useState("");
   const [userTokenBalance, setUserTokenBalance] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
-  // 🔥 ADD THESE HELPER FUNCTIONS FOR FINALIZATION LOGIC
+  // Helper functions for finalization logic
   const now = Math.floor(Date.now() / 1000);
   const endTime = takeover ? parseInt(takeover.endTime) : 0;
   const isActive = takeover?.status === 'active' && now < endTime;
@@ -465,6 +654,25 @@ export default function Page() {
         </div>
       </div>
 
+      {/* Debug Component - Show when there are finalization issues */}
+      {isReadyToFinalize && isAuthority && (
+        <div className="space-y-4">
+          <Button 
+            variant="outline" 
+            onClick={() => setShowDebug(!showDebug)}
+            className="mb-4"
+          >
+            {showDebug ? "Hide" : "Show"} Debug Info
+          </Button>
+          {showDebug && (
+            <DebugTiming 
+              takeoverAddress={takeover.address}
+              frontendTakeover={takeover}
+            />
+          )}
+        </div>
+      )}
+
       {/* Main Details Card */}
       <Card>
         <CardHeader>
@@ -531,7 +739,7 @@ export default function Page() {
             </div>
           </div>
 
-          {/* 🔥 ADD FINALIZATION SECTION HERE */}
+          {/* Finalization Section */}
           {isReadyToFinalize && isAuthority && (
             <div className="border-t pt-4">
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
