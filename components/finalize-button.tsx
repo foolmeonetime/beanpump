@@ -138,19 +138,14 @@ export function FinalizeButton({
       let v2TokenMint: string | null = null;
       
       if (isGoalMet) {
-        // Create V2 mint for successful takeovers
-        console.log('💎 Creating V2 mint for successful takeover...');
+        // Generate V2 mint keypair for successful takeovers (Rust program will create the account)
+        console.log('💎 Generating V2 mint keypair for successful takeover...');
         
-        // Generate a fresh keypair each time to avoid collisions
         v2MintKeypair = Keypair.generate();
         v2TokenMint = v2MintKeypair.publicKey.toBase58();
         
         console.log('📍 Generated V2 Mint:', v2TokenMint);
-        
-        const [createAccountIx, initializeMintIx] = await createV2TokenMint(
-          v2MintKeypair,
-          publicKey
-        );
+        console.log('⚠️  Note: Rust program will create the mint account internally');
         
         const finalizeIx = createFinalizeInstruction(
           takeoverPubkey,
@@ -159,7 +154,8 @@ export function FinalizeButton({
           programId
         );
         
-        transaction = new Transaction().add(createAccountIx, initializeMintIx, finalizeIx);
+        // Only add the finalize instruction - let Rust program create the mint
+        transaction = new Transaction().add(finalizeIx);
         
       } else {
         // For failed takeovers, use a dummy mint (authority's pubkey)
