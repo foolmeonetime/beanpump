@@ -1,4 +1,4 @@
-// app/claims/page.tsx - General claims page showing all user's claimable tokens
+// app/claims/page.tsx - Improved version with better error handling
 "use client";
 
 import { useEffect, useState } from "react";
@@ -222,34 +222,93 @@ export default function ClaimsPage() {
       
       console.log('✅ Transaction confirmed, recording claim...');
       
-      // Record the claim in the database
-      const recordResponse = await fetch('/api/claims', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contributionId: claim.id,
-          contributor: publicKey.toString(),
-          takeoverAddress: claim.takeoverAddress,
-          transactionSignature: signature
-        })
-      });
-      
-      if (!recordResponse.ok) {
-        throw new Error('Failed to record claim in database');
+      // 🔥 IMPROVED: Better error handling for database recording
+      try {
+        const recordResponse = await fetch('/api/claims', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          },
+          body: JSON.stringify({
+            contributionId: claim.id,
+            contributor: publicKey.toString(),
+            takeoverAddress: claim.takeoverAddress,
+            transactionSignature: signature
+          })
+        });
+        
+        console.log('🔍 Database response status:', recordResponse.status);
+        
+        // Get response text first to see what we're dealing with
+        const responseText = await recordResponse.text();
+        console.log('🔍 Raw database response:', responseText);
+        
+        if (!recordResponse.ok) {
+          let errorMessage = `HTTP ${recordResponse.status}`;
+          
+          try {
+            const errorData = JSON.parse(responseText);
+            errorMessage = errorData.error || errorData.message || errorMessage;
+            console.error('🔍 Parsed database error:', errorData);
+          } catch (parseError) {
+            console.error('🔍 Failed to parse error response:', parseError);
+            errorMessage = `${errorMessage}: ${responseText}`;
+          }
+          
+          // Show warning but don't fail completely since blockchain succeeded
+          toast({
+            title: "⚠️ Partial Success",
+            description: `Tokens claimed successfully on blockchain but database update failed: ${errorMessage}. Transaction: ${signature.slice(0, 8)}...`,
+            duration: 10000
+          });
+          
+          // Still refresh to see if the claim shows up
+          setTimeout(() => {
+            fetchClaims();
+          }, 3000);
+          
+          return; // Don't throw error since blockchain succeeded
+        }
+        
+        let recordData;
+        try {
+          recordData = JSON.parse(responseText);
+        } catch (parseError) {
+          throw new Error(`Invalid JSON response from database: ${responseText}`);
+        }
+        
+        if (!recordData.success) {
+          throw new Error(recordData.error || 'Database operation failed');
+        }
+        
+        console.log('✅ Successfully recorded in database:', recordData);
+        
+      } catch (dbError: any) {
+        console.error('❌ Database recording error:', dbError);
+        
+        // Show warning but don't fail completely since blockchain succeeded
+        toast({
+          title: "⚠️ Blockchain Success, Database Error",
+          description: `Your tokens were claimed successfully on the blockchain (${signature.slice(0, 8)}...) but there was an issue updating our database. Your tokens are safe in your wallet.`,
+          duration: 12000
+        });
+        
+        // Still try to refresh in case it worked
+        setTimeout(() => {
+          fetchClaims();
+        }, 3000);
+        
+        return; // Don't throw error since blockchain succeeded
       }
       
-      const recordData = await recordResponse.json();
-      
-      if (!recordData.success) {
-        throw new Error(recordData.error);
-      }
-      
+      // Full success
       toast({
         title: "🎉 Claim Successful!",
         description: `Successfully claimed ${Number(claim.claimableAmount) / 1_000_000} ${
           claim.claimType === 'reward' ? 'V2 tokens' : claim.tokenName
-        }`,
-        duration: 8000
+        }. View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
+        duration: 10000
       });
       
       // Refresh claims
@@ -259,9 +318,21 @@ export default function ClaimsPage() {
       
     } catch (error: any) {
       console.error('❌ Claim error:', error);
+      
+      // Provide more specific error messages
+      let errorMessage = error.message || 'An error occurred while processing your claim';
+      
+      if (error.message?.includes('Transaction failed')) {
+        errorMessage = 'Blockchain transaction failed: ' + error.message;
+      } else if (error.message?.includes('insufficient funds')) {
+        errorMessage = 'Insufficient SOL for transaction fees. Please add some SOL to your wallet.';
+      } else if (error.message?.includes('User rejected')) {
+        errorMessage = 'Transaction was cancelled by user.';
+      }
+      
       toast({
         title: "Claim Failed",
-        description: error.message || 'An error occurred while processing your claim',
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {

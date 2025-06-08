@@ -1,9 +1,9 @@
+// app/providers/wallet-provider.tsx - Updated to remove Phantom warning
 "use client";
 import React, { useMemo } from "react";
 import { ConnectionProvider, WalletProvider } from "@solana/wallet-adapter-react";
 import { WalletModalProvider } from "@solana/wallet-adapter-react-ui";
 import { 
-  PhantomWalletAdapter, 
   SolflareWalletAdapter
 } from "@solana/wallet-adapter-wallets";
 import { clusterApiUrl } from "@solana/web3.js";
@@ -23,10 +23,13 @@ export function WalletContextProvider({ children }: WalletContextProviderProps) 
     return process.env.NEXT_PUBLIC_RPC_URL || clusterApiUrl(network);
   }, [network]);
 
+  // 🔥 UPDATED: Removed PhantomWalletAdapter since Phantom now auto-registers as Standard Wallet
   const wallets = useMemo(() => {
     return [
-      new PhantomWalletAdapter(),
+      // Phantom is now automatically available as a Standard Wallet
+      // PhantomWalletAdapter removed to prevent the warning
       new SolflareWalletAdapter()
+      // Add other wallet adapters here if needed
     ];
   }, []);
 
