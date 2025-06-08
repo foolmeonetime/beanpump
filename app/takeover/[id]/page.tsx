@@ -1,3 +1,4 @@
+// app/takeover/[id]/page.tsx - Updated with basis points support
 "use client";
 
 import { useState, useEffect } from "react";
@@ -22,446 +23,51 @@ import { PROGRAM_ID } from "@/lib/constants";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 
-// Debug Timing Component with Sync Functionality
-function DebugTiming({ takeoverAddress, frontendTakeover, onDataUpdated }: { 
-  takeoverAddress: string; 
-  frontendTakeover: any;
-  onDataUpdated: () => void;
-}) {
-  const { connection } = useConnection();
-  const { toast } = useToast();
-  const [onChainData, setOnChainData] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-
-  const fetchOnChainData = async () => {
-    try {
-      setLoading(true);
-      console.log("🔍 Fetching on-chain takeover data...");
-      
-      const takeoverPubkey = new PublicKey(takeoverAddress);
-      
-      // Get account info
-      const accountInfo = await connection.getAccountInfo(takeoverPubkey);
-      
-      if (!accountInfo) {
-        console.error("❌ Takeover account not found on-chain");
-        toast({
-          title: "Account Not Found",
-          description: "Takeover account not found on blockchain",
-          variant: "destructive"
-        });
-        return;
-      }
-      
-      console.log("📊 Raw account data length:", accountInfo.data.length);
-      
-      // Parse the account data manually
-      const data = accountInfo.data;
-      
-      try {
-        // Skip discriminator (first 8 bytes)
-        let offset = 8;
-        
-        // Read various fields based on your Rust struct layout
-        const authority = new PublicKey(data.slice(offset, offset + 32));
-        offset += 32;
-        
-        const v1TokenMint = new PublicKey(data.slice(offset, offset + 32));
-        offset += 32;
-        
-        const vault = new PublicKey(data.slice(offset, offset + 32));
-        offset += 32;
-        
-        // Read u64 values (8 bytes each, little endian)
-        const minAmount = data.readBigUInt64LE(offset);
-        offset += 8;
-        
-        const startTime = data.readBigInt64LE(offset);
-        offset += 8;
-        
-        const endTime = data.readBigInt64LE(offset);
-        offset += 8;
-        
-        const totalContributed = data.readBigUInt64LE(offset);
-        offset += 8;
-        
-        const contributorCount = data.readBigUInt64LE(offset);
-        offset += 8;
-        
-        // Read boolean flags (1 byte each)
-        const isFinalized = data[offset] === 1;
-        offset += 1;
-        
-        const isSuccessful = data[offset] === 1;
-        offset += 1;
-        
-        const hasV2Mint = data[offset] === 1;
-        offset += 1;
-        
-        // Skip padding to align to 8 bytes (Rust struct alignment)
-        while (offset % 8 !== 0) {
-          offset += 1;
-        }
-        
-        const v2TokenMint = new PublicKey(data.slice(offset, offset + 32));
-        offset += 32;
-        
-        const v2TotalSupply = data.readBigUInt64LE(offset);
-        offset += 8;
-        
-        // Read f64 (8 bytes, little endian)
-        const customRewardRate = data.readDoubleLE(offset);
-        offset += 8;
-        
-        const bump = data[offset];
-        
-        const parsed = {
-          authority: authority.toString(),
-          v1TokenMint: v1TokenMint.toString(),
-          vault: vault.toString(),
-          minAmount: minAmount.toString(),
-          startTime: Number(startTime),
-          endTime: Number(endTime),
-          totalContributed: totalContributed.toString(),
-          contributorCount: Number(contributorCount),
-          isFinalized,
-          isSuccessful,
-          hasV2Mint,
-          v2TokenMint: v2TokenMint.toString(),
-          v2TotalSupply: v2TotalSupply.toString(),
-          customRewardRate,
-          bump
-        };
-        
-        setOnChainData(parsed);
-        console.log("✅ Parsed on-chain data:", parsed);
-        
-      } catch (parseError) {
-        console.error("❌ Error parsing account data:", parseError);
-        toast({
-          title: "Parse Error",
-          description: "Failed to parse on-chain data. Check console for details.",
-          variant: "destructive"
-        });
-      }
-      
-    } catch (error) {
-      console.error("❌ Error fetching on-chain data:", error);
-      toast({
-        title: "Fetch Error",
-        description: "Failed to fetch on-chain data",
-        variant: "destructive"
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const syncDatabaseWithBlockchain = async () => {
-    if (!onChainData) {
-      toast({
-        title: "No On-Chain Data",
-        description: "Please fetch on-chain data first",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    try {
-      setSyncing(true);
-      console.log("🔄 Syncing database with blockchain data...");
-      
-      const response = await fetch('/api/sync-takeover', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          takeoverAddress,
-          onChainEndTime: onChainData.endTime,
-          onChainTotalContributed: onChainData.totalContributed,
-          onChainContributorCount: onChainData.contributorCount,
-          onChainIsFinalized: onChainData.isFinalized,
-          onChainIsSuccessful: onChainData.isSuccessful
-        })
-      });
-
-      const result = await response.json();
-      
-      if (result.success) {
-        toast({
-          title: "✅ Database Synced!",
-          description: "Database updated to match blockchain state. The page will refresh automatically.",
-          duration: 5000
-        });
-        
-        console.log("✅ Database sync successful:", result);
-        
-        // Refresh the parent component data
-        setTimeout(() => {
-          onDataUpdated();
-        }, 1000);
-        
-      } else {
-        throw new Error(result.error);
-      }
-      
-    } catch (error: any) {
-      console.error("❌ Sync error:", error);
-      toast({
-        title: "Sync Failed",
-        description: error.message || "Failed to sync database",
-        variant: "destructive"
-      });
-    } finally {
-      setSyncing(false);
-    }
-  };
-
-  const now = Math.floor(Date.now() / 1000);
-  const timeDiff = onChainData ? Math.abs(parseInt(frontendTakeover.endTime) - onChainData.endTime) : 0;
-  const hasSignificantTimeDifference = timeDiff > 3600; // More than 1 hour difference
-  const hasGoalMet = onChainData ? BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) : false;
+// 🔥 UPDATED: Reward rate utility functions
+class RewardRateUtils {
+  static toBasisPoints(decimal: number): number {
+    return Math.round(decimal * 100);
+  }
   
-  return (
-    <Card className="mb-6 border-yellow-200 bg-yellow-50">
-      <CardHeader>
-        <CardTitle>🐛 Debug: Timing Mismatch Analysis</CardTitle>
-        <CardDescription>
-          The Rust program says "TooEarly" - let's diagnose and fix the issue
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <div className="flex gap-2 flex-wrap">
-          <Button onClick={fetchOnChainData} disabled={loading}>
-            {loading ? (
-              <div className="flex items-center gap-2">
-                <LoadingSpinner />
-                <span>Fetching...</span>
-              </div>
-            ) : (
-              "🔍 Fetch On-Chain Data"
-            )}
-          </Button>
-          
-          {onChainData && hasSignificantTimeDifference && (
-            <Button 
-              onClick={syncDatabaseWithBlockchain} 
-              disabled={syncing}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              {syncing ? (
-                <div className="flex items-center gap-2">
-                  <LoadingSpinner />
-                  <span>Syncing...</span>
-                </div>
-              ) : (
-                "🔄 Sync Database"
-              )}
-            </Button>
-          )}
-        </div>
-        
-        {/* Warning for significant time differences */}
-        {hasSignificantTimeDifference && (
-          <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
-            <h4 className="font-semibold text-red-800 mb-2">⚠️ Major Timing Issue Detected!</h4>
-            <p className="text-sm text-red-700 mb-2">
-              Database and blockchain have different end times ({Math.floor(timeDiff / 86400)} days, {Math.floor((timeDiff % 86400) / 3600)} hours apart).
-            </p>
-            {hasGoalMet && (
-              <p className="text-sm text-red-700">
-                <strong>Good news:</strong> The funding goal is met on-chain, so finalization should work after syncing the database.
-              </p>
-            )}
-          </div>
-        )}
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Frontend Data */}
-          <div className="p-4 border rounded-lg bg-white">
-            <h4 className="font-semibold mb-3 flex items-center gap-2">
-              📱 Frontend/Database Data
-            </h4>
-            <div className="text-sm space-y-2">
-              <div className="flex justify-between">
-                <span className="font-medium">Current Time:</span>
-                <span>{now}</span>
-              </div>
-              <div className="text-xs text-gray-500 mb-2">
-                {new Date(now * 1000).toLocaleString()}
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">End Time:</span>
-                <span>{frontendTakeover.endTime}</span>
-              </div>
-              <div className="text-xs text-gray-500 mb-2">
-                {new Date(parseInt(frontendTakeover.endTime) * 1000).toLocaleString()}
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">Is Expired:</span>
-                <span className={now >= parseInt(frontendTakeover.endTime) ? "text-green-600" : "text-red-600"}>
-                  {now >= parseInt(frontendTakeover.endTime) ? "✅ Yes" : "❌ No"}
-                </span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">Total Contributed:</span>
-                <span>{(parseInt(frontendTakeover.totalContributed) / 1_000_000).toLocaleString()}</span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">Min Amount:</span>
-                <span>{(parseInt(frontendTakeover.minAmount) / 1_000_000).toLocaleString()}</span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">Goal Met:</span>
-                <span className={BigInt(frontendTakeover.totalContributed) >= BigInt(frontendTakeover.minAmount) ? "text-green-600" : "text-red-600"}>
-                  {BigInt(frontendTakeover.totalContributed) >= BigInt(frontendTakeover.minAmount) ? "✅ Yes" : "❌ No"}
-                </span>
-              </div>
-              
-              <div className="flex justify-between">
-                <span className="font-medium">Is Finalized:</span>
-                <span className={frontendTakeover.isFinalized ? "text-green-600" : "text-red-600"}>
-                  {frontendTakeover.isFinalized ? "✅ Yes" : "❌ No"}
-                </span>
-              </div>
-            </div>
-          </div>
-          
-          {/* On-Chain Data */}
-          <div className="p-4 border rounded-lg bg-white">
-            <h4 className="font-semibold mb-3 flex items-center gap-2">
-              ⛓️ Blockchain Data
-            </h4>
-            {onChainData ? (
-              <div className="text-sm space-y-2">
-                <div className="flex justify-between">
-                  <span className="font-medium">End Time:</span>
-                  <span>{onChainData.endTime}</span>
-                </div>
-                <div className="text-xs text-gray-500 mb-2">
-                  {new Date(onChainData.endTime * 1000).toLocaleString()}
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="font-medium">Is Expired:</span>
-                  <span className={now >= onChainData.endTime ? "text-green-600" : "text-red-600"}>
-                    {now >= onChainData.endTime ? "✅ Yes" : "❌ No"}
-                  </span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="font-medium">Total Contributed:</span>
-                  <span>{(parseInt(onChainData.totalContributed) / 1_000_000).toLocaleString()}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="font-medium">Min Amount:</span>
-                  <span>{(parseInt(onChainData.minAmount) / 1_000_000).toLocaleString()}</span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="font-medium">Goal Met:</span>
-                  <span className={BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) ? "text-green-600" : "text-red-600"}>
-                    {BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) ? "✅ Yes" : "❌ No"}
-                  </span>
-                </div>
-                
-                <div className="flex justify-between">
-                  <span className="font-medium">Is Finalized:</span>
-                  <span className={onChainData.isFinalized ? "text-green-600" : "text-red-600"}>
-                    {onChainData.isFinalized ? "✅ Yes" : "❌ No"}
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-gray-500 text-center py-8">
-                Click "Fetch On-Chain Data" to load blockchain state
-              </div>
-            )}
-          </div>
-        </div>
-        
-        {/* Analysis Section */}
-        {onChainData && (
-          <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg">
-            <h4 className="font-semibold text-blue-800 mb-3">📊 Detailed Analysis</h4>
-            <div className="text-sm text-blue-700 space-y-2">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <strong>Time Difference:</strong> {timeDiff.toLocaleString()} seconds
-                </div>
-                <div>
-                  <strong>Days Apart:</strong> {Math.floor(timeDiff / 86400)} days
-                </div>
-              </div>
-              
-              <div>
-                <strong>Contribution Difference:</strong> {Math.abs(parseInt(frontendTakeover.totalContributed) - parseInt(onChainData.totalContributed)) / 1_000_000} tokens
-              </div>
-              
-              {/* Finalization Requirements Check */}
-              <div className="mt-4 p-3 bg-white rounded border">
-                <strong>🔍 Finalization Requirements (Rust Program Logic):</strong>
-                <ul className="mt-2 space-y-1">
-                  <li className="flex items-center gap-2">
-                    <span className={!onChainData.isFinalized ? "text-green-600" : "text-red-600"}>
-                      {!onChainData.isFinalized ? "✅" : "❌"}
-                    </span>
-                    <span>Not already finalized</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className={(BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) || now >= onChainData.endTime) ? "text-green-600" : "text-red-600"}>
-                      {(BigInt(onChainData.totalContributed) >= BigInt(onChainData.minAmount) || now >= onChainData.endTime) ? "✅" : "❌"}
-                    </span>
-                    <span>Goal reached OR time expired</span>
-                  </li>
-                  <li className="flex items-center gap-2">
-                    <span className={now >= onChainData.endTime ? "text-green-600" : "text-red-600"}>
-                      {now >= onChainData.endTime ? "✅" : "❌"}
-                    </span>
-                    <span>Current time ≥ end time (diff: {(now - onChainData.endTime).toLocaleString()}s)</span>
-                  </li>
-                </ul>
-                
-                {/* Solution Recommendation */}
-                {hasSignificantTimeDifference && hasGoalMet && (
-                  <div className="mt-3 p-3 bg-green-100 rounded border border-green-300">
-                    <strong className="text-green-800">💡 Recommended Solution:</strong>
-                    <p className="text-green-700 text-sm mt-1">
-                      The funding goal is met ({(parseInt(onChainData.totalContributed) / 1_000_000).toLocaleString()} ≥ {(parseInt(onChainData.minAmount) / 1_000_000).toLocaleString()}), 
-                      but there's a timing discrepancy from takeover creation. Click "Sync Database" to update 
-                      your database with the correct blockchain end time, then finalization will work immediately.
-                    </p>
-                  </div>
-                )}
-                
-                {!hasGoalMet && now < onChainData.endTime && (
-                  <div className="mt-3 p-3 bg-yellow-100 rounded border border-yellow-300">
-                    <strong className="text-yellow-800">⏳ Status:</strong>
-                    <p className="text-yellow-700 text-sm mt-1">
-                      Takeover is still active. Goal not yet met and time hasn't expired. 
-                      You'll need to wait until {new Date(onChainData.endTime * 1000).toLocaleString()} or reach the funding goal.
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-        
-        <div className="text-xs text-gray-600 bg-gray-50 p-3 rounded">
-          💡 <strong>About this tool:</strong> This debug panel compares your database with the actual blockchain state. 
-          Time discrepancies usually happen due to bugs during takeover creation where duration calculations differ 
-          between frontend and Rust program.
-        </div>
-      </CardContent>
-    </Card>
-  );
+  static toDecimal(basisPoints: number): number {
+    return basisPoints / 100.0;
+  }
+  
+  static isValid(decimal: number): boolean {
+    return decimal >= 0.5 && decimal <= 10.0;
+  }
+  
+  static formatRate(decimal: number): string {
+    return `${decimal.toFixed(1)}x`;
+  }
+  
+  // Safe parsing that handles corrupted f64 values
+  static parseRewardRate(rawData: any): number {
+    // Handle new format (basis points)
+    if (rawData.rewardRateBp !== undefined && typeof rawData.rewardRateBp === 'number') {
+      const decimal = this.toDecimal(rawData.rewardRateBp);
+      console.log(`✅ Using basis points: ${rawData.rewardRateBp}bp = ${decimal}x`);
+      return decimal;
+    }
+    
+    // Handle old format (f64) - might be corrupted
+    if (rawData.customRewardRate !== undefined) {
+      if (typeof rawData.customRewardRate === 'number' && 
+          isFinite(rawData.customRewardRate) && 
+          this.isValid(rawData.customRewardRate)) {
+        console.log(`✅ Using f64: ${rawData.customRewardRate}x`);
+        return rawData.customRewardRate;
+      } else {
+        console.warn('🚨 Corrupted f64 reward rate detected:', rawData.customRewardRate);
+        console.log('🔧 Using fallback rate: 1.5x');
+        return 1.5; // Safe fallback
+      }
+    }
+    
+    // No reward rate field found
+    console.log('🔧 No reward rate found, using default: 1.5x');
+    return 1.5;
+  }
 }
 
 interface Takeover {
@@ -479,7 +85,9 @@ interface Takeover {
   isSuccessful: boolean;
   hasV2Mint: boolean;
   v2TokenMint?: string;
-  customRewardRate: number;
+  // 🔥 UPDATED: Handle both reward rate formats
+  rewardRateBp?: number;        // New format (u16 basis points)
+  customRewardRate?: number;    // Old format (f64) - might be corrupted
   status: 'active' | 'ended' | 'successful' | 'failed';
   progressPercentage: number;
   created_at: string;
@@ -554,6 +162,13 @@ export default function Page() {
   const params = useParams();
   const takeoverAddress = params.id as string;
   
+  console.log("=== PAGE DEBUG INFO ===");
+  console.log("Raw params:", params);
+  console.log("Takeover address from URL:", takeoverAddress);
+  console.log("Type of address:", typeof takeoverAddress);
+  console.log("Address length:", takeoverAddress?.length);
+  console.log("=======================");
+  
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
   const { toast } = useToast();
@@ -564,7 +179,9 @@ export default function Page() {
   const [contributionAmount, setContributionAmount] = useState("");
   const [userTokenBalance, setUserTokenBalance] = useState<number>(0);
   const [error, setError] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
+
+  // 🔥 UPDATED: Parse reward rate safely
+  const safeRewardRate = takeover ? RewardRateUtils.parseRewardRate(takeover) : 1.5;
 
   // Helper functions for finalization logic
   const now = Math.floor(Date.now() / 1000);
@@ -590,17 +207,21 @@ export default function Page() {
       }
       
       const data = await response.json();
+      console.log("API response:", data);
       
-      if (!data || !data.takeovers) {
+      if (!data) {
         throw new Error('No data received from API');
       }
       
-      const takeovers = data.takeovers;
+      let takeovers = data.takeovers || data || [];
       
       if (!Array.isArray(takeovers)) {
         console.error("Response is not an array:", takeovers);
         throw new Error('Invalid API response: expected array of takeovers');
       }
+      
+      console.log("Looking for takeover with address:", takeoverAddress);
+      console.log("Available takeovers:", takeovers.map((t: any) => ({ id: t.id, address: t.address })));
       
       const foundTakeover = takeovers.find((t: Takeover) => t.address === takeoverAddress);
       
@@ -680,11 +301,15 @@ export default function Page() {
       const vault = new PublicKey(takeover.vault);
       const contributorAta = getAssociatedTokenAddressLegacy(tokenMint, publicKey);
       
+      console.log("3. Contributor ATA:", contributorAta.toString());
+      
       const ataAccountInfo = await connection.getAccountInfo(contributorAta);
+      console.log("4. ATA exists:", !!ataAccountInfo);
+      
       const transaction = new Transaction();
       
       if (!ataAccountInfo) {
-        console.log("Adding ATA creation instruction");
+        console.log("5. Adding ATA creation instruction");
         const createAtaIx = createAssociatedTokenAccountInstructionLegacy(
           publicKey,
           contributorAta,
@@ -694,7 +319,7 @@ export default function Page() {
         transaction.add(createAtaIx);
       }
       
-      const [contributorAccount] = PublicKey.findProgramAddressSync(
+      const [contributorAccount, contributorBump] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("contributor"),
           takeoverPubkey.toBuffer(),
@@ -702,6 +327,8 @@ export default function Page() {
         ],
         new PublicKey(PROGRAM_ID)
       );
+      
+      console.log("6. Contributor PDA:", contributorAccount.toString(), "bump:", contributorBump);
       
       const contributorAccountInfo = await connection.getAccountInfo(contributorAccount);
       if (contributorAccountInfo) {
@@ -718,17 +345,39 @@ export default function Page() {
         amountLamports
       );
       
+      console.log("7. Contribute instruction created");
       transaction.add(contributeIx);
       
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
+      console.log("9. Transaction built, simulating first...");
+      
+      try {
+        const simulation = await connection.simulateTransaction(transaction);
+        console.log("10. Simulation result:", simulation);
+        
+        if (simulation.value.err) {
+          console.error("11. Simulation failed:", simulation.value.err);
+          console.error("12. Simulation logs:", simulation.value.logs);
+          throw new Error(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
+        }
+        
+        console.log("13. Simulation successful, logs:", simulation.value.logs);
+      } catch (simError) {
+        console.error("14. Simulation error:", simError);
+        throw simError;
+      }
+      
+      console.log("15. Sending transaction...");
       const signature = await sendTransaction(transaction, connection, {
         skipPreflight: false,
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
+      
+      console.log("16. Transaction sent, signature:", signature);
       
       const confirmation = await connection.confirmTransaction({
         signature,
@@ -740,11 +389,15 @@ export default function Page() {
         throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
       }
       
-      // Save to database
+      console.log("17. Transaction confirmed!");
+      
       try {
+        console.log("18. Saving contribution to database...");
         const dbResponse = await fetch('/api/contributions', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+          },
           body: JSON.stringify({
             takeoverId: takeover.id,
             amount: amountLamports.toString(),
@@ -754,16 +407,26 @@ export default function Page() {
         });
 
         if (!dbResponse.ok) {
-          console.error("Database save failed, but blockchain transaction succeeded");
+          const errorData = await dbResponse.json();
+          throw new Error(`Database save failed: ${errorData.error || 'Unknown error'}`);
         }
+
+        const dbResult = await dbResponse.json();
+        console.log("19. Successfully saved contribution to database:", dbResult);
+        
       } catch (dbError) {
         console.error("Database save error:", dbError);
+        toast({
+          title: "Partial Success",
+          description: "Contribution successful on blockchain but failed to save to database. Check console for details.",
+          variant: "destructive"
+        });
       }
       
       toast({
         title: "Contribution Successful! 🎉",
-        description: `You contributed ${amount} tokens to the takeover.`,
-        duration: 8000
+        description: `You contributed ${amount} tokens to the takeover. View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
+        duration: 10000
       });
 
       setContributionAmount("");
@@ -855,32 +518,6 @@ export default function Page() {
         </div>
       </div>
 
-      {/* Debug Component - Show when there are finalization issues */}
-      {isReadyToFinalize && isAuthority && (
-        <div className="space-y-4">
-          <div className="flex items-center gap-4">
-            <Button 
-              variant="outline" 
-              onClick={() => setShowDebug(!showDebug)}
-            >
-              {showDebug ? "Hide" : "Show"} Debug Info
-            </Button>
-            {!showDebug && (
-              <p className="text-sm text-gray-600">
-                Having trouble with finalization? Click to debug timing issues.
-              </p>
-            )}
-          </div>
-          {showDebug && (
-            <DebugTiming 
-              takeoverAddress={takeover.address}
-              frontendTakeover={takeover}
-              onDataUpdated={fetchTakeoverDetails}
-            />
-          )}
-        </div>
-      )}
-
       {/* Main Details Card */}
       <Card>
         <CardHeader>
@@ -924,7 +561,18 @@ export default function Page() {
             </div>
             <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg text-center">
               <div className="text-xs text-gray-500 mb-1">Reward Rate</div>
-              <div className="text-sm font-medium">{takeover.customRewardRate}x</div>
+              <div className="text-sm font-medium">
+                {RewardRateUtils.formatRate(safeRewardRate)}
+                {/* 🔥 UPDATED: Show if rate was corrected */}
+                {takeover.customRewardRate && 
+                 takeover.customRewardRate !== safeRewardRate && (
+                  <span className="text-xs text-green-600 ml-1">(fixed)</span>
+                )}
+              </div>
+              {/* 🔥 UPDATED: Show basis points if available */}
+              {takeover.rewardRateBp && (
+                <div className="text-xs text-gray-400">{takeover.rewardRateBp}bp</div>
+              )}
             </div>
             <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg text-center">
               <div className="text-xs text-gray-500 mb-1">{takeover.tokenName}</div>
@@ -947,7 +595,7 @@ export default function Page() {
             </div>
           </div>
 
-          {/* Finalization Section */}
+          {/* 🔥 UPDATED: Finalization section with proper reward rate */}
           {isReadyToFinalize && isAuthority && (
             <div className="border-t pt-4">
               <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
@@ -955,7 +603,7 @@ export default function Page() {
                 <p className="text-sm text-yellow-700 mb-4">
                   Your takeover is ready to be finalized! 
                   {isGoalMet 
-                    ? " 🎉 The funding goal has been reached - contributors will receive V2 tokens."
+                    ? ` 🎉 The funding goal has been reached - contributors will receive ${RewardRateUtils.formatRate(safeRewardRate)} V2 tokens.`
                     : " ⏰ The time limit has expired - contributors will receive refunds."
                   }
                 </p>
@@ -966,6 +614,7 @@ export default function Page() {
                   isGoalMet={isGoalMet}
                   isReadyToFinalize={true}
                   onFinalized={() => {
+                    // Refresh the takeover data after finalization
                     fetchTakeoverDetails();
                   }}
                 />
@@ -1017,14 +666,22 @@ export default function Page() {
                 </div>
               </div>
 
+              {/* 🔥 UPDATED: Show reward calculation with safe rate */}
               {Number(contributionAmount) > 0 && (
                 <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
                   <p className="text-sm text-blue-800 dark:text-blue-200">
-                    💡 <strong>If successful:</strong> You'll receive {(Number(contributionAmount) * takeover.customRewardRate).toLocaleString()} V2 {takeover.tokenName}
+                    💡 <strong>If successful:</strong> You'll receive {(Number(contributionAmount) * safeRewardRate).toLocaleString()} V2 {takeover.tokenName}
+                    <span className="text-xs ml-1">({RewardRateUtils.formatRate(safeRewardRate)} reward rate)</span>
                   </p>
                   <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
                     If unsuccessful: You'll get your {contributionAmount} {takeover.tokenName} refunded
                   </p>
+                  {/* Show if reward rate was corrected */}
+                  {takeover.customRewardRate && takeover.customRewardRate !== safeRewardRate && (
+                    <p className="text-xs text-green-600 mt-1">
+                      ✅ Reward rate automatically corrected from corrupted value
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -1042,7 +699,9 @@ export default function Page() {
             </h3>
             <p className="text-gray-500">
               {takeover.isFinalized 
-                ? (takeover.isSuccessful ? "This takeover was successful! Contributors can now claim their V2 tokens." : "This takeover failed. Contributors can claim refunds.")
+                ? (takeover.isSuccessful 
+                    ? `This takeover was successful! Contributors can now claim their ${RewardRateUtils.formatRate(safeRewardRate)} V2 tokens.` 
+                    : "This takeover failed. Contributors can claim refunds.")
                 : "This takeover has ended and is awaiting finalization."
               }
             </p>

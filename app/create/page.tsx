@@ -19,6 +19,25 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID } from "@/lib/constants";
 import { ImageUpload } from "@/components/image-upload";
 
+// 🔥 UPDATED: Reward rate utility class
+class RewardRateUtils {
+  static toBasisPoints(decimal: number): number {
+    return Math.round(decimal * 100);
+  }
+  
+  static toDecimal(basisPoints: number): number {
+    return basisPoints / 100.0;
+  }
+  
+  static isValid(decimal: number): boolean {
+    return decimal >= 0.5 && decimal <= 10.0;
+  }
+  
+  static formatRate(decimal: number): string {
+    return `${decimal.toFixed(1)}x`;
+  }
+}
+
 // Function to create initialize instruction manually
 function createInitializeInstruction(
   programId: PublicKey,
@@ -80,10 +99,15 @@ export default function CreateTakeover() {
     v1TokenMint: "So11111111111111111111111111111111111111112",
     minAmount: "1000",
     duration: "7",
-    customRewardRate: "1.0",
+    customRewardRate: "1.5",
     tokenName: "Test Token",
     imageUrl: ""
   });
+
+  // 🔥 UPDATED: Parse and validate reward rate
+  const rewardRateDecimal = parseFloat(formData.customRewardRate) || 1.5;
+  const rewardRateBp = RewardRateUtils.toBasisPoints(rewardRateDecimal);
+  const isValidRewardRate = RewardRateUtils.isValid(rewardRateDecimal);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -91,6 +115,16 @@ export default function CreateTakeover() {
       toast({
         title: "Wallet Error",
         description: "Please connect your wallet",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // 🔥 UPDATED: Validate reward rate before submission
+    if (!isValidRewardRate) {
+      toast({
+        title: "Invalid Reward Rate",
+        description: "Reward rate must be between 0.5x and 10.0x",
         variant: "destructive"
       });
       return;
@@ -112,13 +146,12 @@ export default function CreateTakeover() {
       const v1Mint = new PublicKey(formData.v1TokenMint);
       const minAmount = BigInt(Number(formData.minAmount) * 1_000_000); // 6 decimals
       const duration = BigInt(Number(formData.duration) * 86400); // days to seconds
-      const rewardRate = Number(formData.customRewardRate);
       
       console.log("2. Form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
       console.log("   Min Amount:", minAmount.toString());
       console.log("   Duration:", duration.toString());
-      console.log("   Reward Rate:", rewardRate);
+      console.log("   Reward Rate:", rewardRateDecimal, `(${rewardRateBp} basis points)`);
       
       // Find takeover PDA
       const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
@@ -155,7 +188,7 @@ export default function CreateTakeover() {
         vault.publicKey,
         minAmount,
         duration,
-        rewardRate
+        rewardRateDecimal // Program will convert to basis points internally
       );
       
       console.log("6. Initialize instruction created");
@@ -197,7 +230,7 @@ export default function CreateTakeover() {
       
       console.log("10. Transaction confirmed! Now saving to database...");
       
-      // 🔥 HERE'S THE MISSING PIECE - Save to database after successful blockchain transaction
+      // 🔥 UPDATED: Save with basis points info for debugging
       try {
         const dbResponse = await fetch('/api/takeovers', {
           method: 'POST',
@@ -212,7 +245,7 @@ export default function CreateTakeover() {
             minAmount: minAmount.toString(),
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            customRewardRate: rewardRate,
+            customRewardRate: rewardRateDecimal,
             tokenName: formData.tokenName,
             imageUrl: formData.imageUrl
           })
@@ -239,7 +272,7 @@ export default function CreateTakeover() {
       
       toast({
         title: "Takeover Created Successfully! 🎉",
-        description: `View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
+        description: `${formData.tokenName} takeover created with ${RewardRateUtils.formatRate(rewardRateDecimal)} reward rate!\n\nView on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
         duration: 10000
       });
 
@@ -248,7 +281,7 @@ export default function CreateTakeover() {
         v1TokenMint: "So11111111111111111111111111111111111111112",
         minAmount: "1000",
         duration: "7",
-        customRewardRate: "1.0",
+        customRewardRate: "1.5",
         tokenName: "Test Token",
         imageUrl: ""
       });
@@ -279,7 +312,7 @@ export default function CreateTakeover() {
         <CardHeader>
           <CardTitle>Create Community Takeover</CardTitle>
           <CardDescription>
-            Using raw transaction approach to bypass IDL issues
+            Create a new takeover campaign with secure basis points reward system
             <br />
             Program ID: {PROGRAM_ID}
             <br />
@@ -344,19 +377,56 @@ export default function CreateTakeover() {
               />
             </div>
 
+            {/* 🔥 UPDATED: Enhanced reward rate input with basis points display */}
             <div className="space-y-2">
               <Label htmlFor="customRewardRate">V2 Reward Rate Multiplier</Label>
               <Input
                 id="customRewardRate"
                 type="number"
                 step="0.1"
+                min="0.5"
+                max="10.0"
                 value={formData.customRewardRate}
                 onChange={(e) => setFormData(prev => ({ ...prev, customRewardRate: e.target.value }))}
+                className={!isValidRewardRate ? "border-red-500" : ""}
                 required
               />
+              <div className="text-sm space-y-1">
+                <div className={`${isValidRewardRate ? 'text-green-600' : 'text-red-600'}`}>
+                  Contributors get {RewardRateUtils.formatRate(rewardRateDecimal)} tokens if successful
+                </div>
+                <div className="font-mono text-xs text-gray-500">
+                  Stored as: {rewardRateBp} basis points (safe u16 format)
+                </div>
+                {!isValidRewardRate && (
+                  <div className="text-red-600 text-xs">
+                    ⚠️ Must be between 0.5x and 10.0x
+                  </div>
+                )}
+              </div>
             </div>
 
-            <Button type="submit" disabled={loading} className="w-full">
+            {/* 🔥 UPDATED: Preview section showing calculations */}
+            {isValidRewardRate && Number(formData.minAmount) > 0 && (
+              <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">📊 Takeover Preview</h4>
+                <div className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
+                  <div>• Goal: {Number(formData.minAmount).toLocaleString()} {formData.tokenName}</div>
+                  <div>• Duration: {formData.duration} days</div>
+                  <div>• Reward rate: {RewardRateUtils.formatRate(rewardRateDecimal)}</div>
+                  <div>• If successful: {(Number(formData.minAmount) * rewardRateDecimal).toLocaleString()} V2 tokens total</div>
+                  <div className="text-xs pt-1">
+                    💡 Reward rate stored as {rewardRateBp} basis points (no f64 corruption!)
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <Button 
+              type="submit" 
+              disabled={loading || !isValidRewardRate} 
+              className="w-full"
+            >
               {loading ? <LoadingSpinner /> : "Create Takeover"}
             </Button>
           </form>

@@ -1,4 +1,4 @@
-// Updated takeovers-list.tsx - Manual finalization version
+// Updated takeovers-list.tsx with basis points support
 "use client"
 
 import { useEffect, useState } from "react"
@@ -8,6 +8,52 @@ import { Button } from "@/components/ui/button"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useToast } from "@/components/ui/use-toast"
 import Link from "next/link"
+
+// 🔥 UPDATED: Reward rate utility functions
+class RewardRateUtils {
+  static toBasisPoints(decimal: number): number {
+    return Math.round(decimal * 100);
+  }
+  
+  static toDecimal(basisPoints: number): number {
+    return basisPoints / 100.0;
+  }
+  
+  static isValid(decimal: number): boolean {
+    return decimal >= 0.5 && decimal <= 10.0;
+  }
+  
+  static formatRate(decimal: number): string {
+    return `${decimal.toFixed(1)}x`;
+  }
+  
+  // 🔥 SAFE PARSING: Handle both old (f64) and new (u16) formats
+  static parseRewardRate(takeover: any): number {
+    // Check for new basis points format first
+    if (takeover.rewardRateBp !== undefined && typeof takeover.rewardRateBp === 'number') {
+      const decimal = this.toDecimal(takeover.rewardRateBp);
+      console.log(`✅ Using basis points: ${takeover.rewardRateBp}bp = ${decimal}x for ${takeover.tokenName}`);
+      return decimal;
+    }
+    
+    // Check for old f64 format (might be corrupted)
+    if (takeover.customRewardRate !== undefined) {
+      if (typeof takeover.customRewardRate === 'number' && 
+          isFinite(takeover.customRewardRate) && 
+          this.isValid(takeover.customRewardRate)) {
+        console.log(`✅ Using f64: ${takeover.customRewardRate}x for ${takeover.tokenName}`);
+        return takeover.customRewardRate;
+      } else {
+        console.warn(`🚨 Corrupted f64 for ${takeover.tokenName}:`, takeover.customRewardRate);
+        return 1.5; // Safe fallback
+      }
+    }
+    
+    // Fallback for missing data
+    console.log(`🔧 No reward rate found for ${takeover.tokenName}, using 1.5x`);
+    return 1.5;
+  }
+}
 
 interface Takeover {
   id: number;
@@ -24,7 +70,9 @@ interface Takeover {
   isSuccessful: boolean;
   hasV2Mint: boolean;
   v2TokenMint?: string;
-  customRewardRate: number;
+  // 🔥 UPDATED: Handle both reward rate formats
+  rewardRateBp?: number;        // New format (u16 basis points)
+  customRewardRate?: number;    // Old format (f64) - might be corrupted
   status: 'active' | 'ended' | 'successful' | 'failed' | 'goal_reached';
   progressPercentage: number;
   created_at: string;
@@ -65,6 +113,14 @@ export function TakeoversList() {
       }
       
       setTakeovers(data.takeovers || [])
+      
+      // 🔥 UPDATED: Log reward rate parsing for debugging
+      data.takeovers.forEach((takeover: Takeover) => {
+        const parsedRate = RewardRateUtils.parseRewardRate(takeover);
+        if (takeover.customRewardRate !== parsedRate) {
+          console.log(`🔧 Fixed reward rate for ${takeover.tokenName}: ${takeover.customRewardRate} → ${parsedRate}`);
+        }
+      });
       
       // Log debug info
       const now = Math.floor(Date.now() / 1000)
@@ -246,6 +302,9 @@ export function TakeoversList() {
           const isGoalReached = takeover.status === 'goal_reached'
           const isFinalized = takeover.isFinalized
 
+          // 🔥 UPDATED: Parse reward rate safely
+          const safeRewardRate = RewardRateUtils.parseRewardRate(takeover);
+
           // Format time remaining
           let timeLeft = ""
           let statusColor = ""
@@ -311,6 +370,13 @@ export function TakeoversList() {
                             {takeover.finalize_tx && (
                               <div>Finalize TX: {takeover.finalize_tx.slice(0, 8)}...</div>
                             )}
+                            {/* 🔥 UPDATED: Debug reward rate info */}
+                            <div className="mt-1 p-1 bg-yellow-100 rounded text-xs">
+                              Reward Rate Debug:
+                              {takeover.rewardRateBp && <div>• BP: {takeover.rewardRateBp} → {RewardRateUtils.toDecimal(takeover.rewardRateBp)}x</div>}
+                              {takeover.customRewardRate && <div>• F64: {takeover.customRewardRate}</div>}
+                              <div>• Used: {safeRewardRate}x</div>
+                            </div>
                           </div>
                         )}
                       </div>
@@ -359,7 +425,14 @@ export function TakeoversList() {
                     </div>
                     <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Reward Rate</div>
-                      <div className="text-sm font-medium">{takeover.customRewardRate}x</div>
+                      <div className="text-sm font-medium">
+                        {RewardRateUtils.formatRate(safeRewardRate)}
+                        {/* 🔥 UPDATED: Show if rate was fixed */}
+                        {takeover.customRewardRate && 
+                         takeover.customRewardRate !== safeRewardRate && (
+                          <span className="text-xs text-yellow-600 ml-1">⚠️</span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -369,6 +442,10 @@ export function TakeoversList() {
                       <div className="text-sm font-medium text-green-800 mb-1">V2 Token Created</div>
                       <div className="text-xs font-mono text-green-600">
                         {takeover.v2TokenMint}
+                      </div>
+                      {/* 🔥 UPDATED: Show V2 supply calculation */}
+                      <div className="text-xs text-green-700 mt-1">
+                        V2 Supply: {((parseInt(takeover.totalContributed) / 1_000_000) * safeRewardRate).toLocaleString()} tokens
                       </div>
                     </div>
                   )}

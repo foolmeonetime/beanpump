@@ -597,8 +597,8 @@
             "type": "u64"
           },
           {
-            "name": "custom_reward_rate",
-            "type": "f64"
+            "name": "reward_rate_bp",
+            "type": "u16"
           },
           {
             "name": "bump",
