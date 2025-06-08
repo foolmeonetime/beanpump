@@ -1,15 +1,10 @@
-// app/api/finalize/route.ts - Improved version with better error handling and debugging
+// app/api/finalize/route.ts - Fixed version that works with existing database schema
 import { NextRequest, NextResponse } from 'next/server';
 import { Pool } from '@neondatabase/serverless';
 import { 
   Connection, 
-  PublicKey, 
-  Transaction, 
-  TransactionInstruction
+  PublicKey
 } from '@solana/web3.js';
-import { 
-  TOKEN_PROGRAM_ID
-} from '@solana/spl-token';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
@@ -17,33 +12,6 @@ const connection = new Connection(
   process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
   'confirmed'
 );
-
-// Helper to create finalize instruction (based on your IDL)
-function createFinalizeInstruction(
-  programId: PublicKey,
-  takeover: PublicKey,
-  authority: PublicKey,
-  v2Mint: PublicKey
-) {
-  // Exact discriminator from your IDL: finalize_takeover
-  const discriminator = Buffer.from([237, 226, 215, 181, 203, 65, 244, 223]);
-  
-  // Account order exactly matching your IDL
-  const keys = [
-    { pubkey: takeover, isSigner: false, isWritable: true },           // takeover
-    { pubkey: authority, isSigner: true, isWritable: true },           // authority  
-    { pubkey: v2Mint, isSigner: true, isWritable: true },              // v2_mint (signer!)
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },  // token_program
-    { pubkey: new PublicKey("11111111111111111111111111111111"), isSigner: false, isWritable: false }, // system_program
-    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false }, // rent
-  ];
-
-  return new TransactionInstruction({
-    keys,
-    programId,
-    data: discriminator,
-  });
-}
 
 // GET: Check which takeovers are ready for finalization
 export async function GET(request: NextRequest) {
@@ -253,7 +221,7 @@ export async function POST(request: NextRequest) {
         console.log('🔍 Finalize API: Calculated V2 total supply:', v2TotalSupply);
       }
       
-      // Update takeover as finalized
+      // 🔥 FIXED: Update takeover with only existing columns
       console.log('🔍 Finalize API: Updating takeover in database...');
       const updateResult = await client.query(`
         UPDATE takeovers 
@@ -262,17 +230,14 @@ export async function POST(request: NextRequest) {
           is_successful = $1,
           has_v2_mint = $2,
           v2_token_mint = $3,
-          v2_total_supply = $4,
-          finalize_tx = $5,
-          finalized_at = NOW()
-        WHERE id = $6
+          v2_total_supply = $4
+        WHERE id = $5
         RETURNING *
       `, [
         isSuccessful, 
         isSuccessful && v2TokenMint ? true : false,
         v2TokenMint || null,
         v2TotalSupply,
-        transactionSignature,
         takeover.id
       ]);
       
