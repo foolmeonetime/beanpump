@@ -1,4 +1,4 @@
-// components/finalize-button.tsx - Fixed version with proper keypair handling
+// components/finalize-button.tsx - Improved version with better error handling
 "use client";
 
 import { useState } from "react";
@@ -78,21 +78,17 @@ export function FinalizeButton({
     return [createAccountIx, initializeMintIx];
   };
 
-  const createFinalizeInstruction = (
-    takeover: PublicKey, 
-    authority: PublicKey, 
-    v2Mint: PublicKey, 
-    programId: PublicKey
-  ) => {
+  const createFinalizeInstruction = (takeover: PublicKey, authority: PublicKey, v2Mint: PublicKey) => {
+    const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
     const discriminator = Buffer.from([237, 226, 215, 181, 203, 65, 244, 223]);
     
     return new TransactionInstruction({
       keys: [
         { pubkey: takeover, isSigner: false, isWritable: true },
         { pubkey: authority, isSigner: true, isWritable: true },
-        { pubkey: v2Mint, isSigner: true, isWritable: true }, // MUST be signer according to IDL
+        { pubkey: v2Mint, isSigner: true, isWritable: true },
         { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-        { pubkey: new PublicKey("11111111111111111111111111111111"), isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
         { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
       ],
       programId,
@@ -130,7 +126,6 @@ export function FinalizeButton({
       
       const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
       const takeoverPubkey = new PublicKey(takeoverAddress);
-      
       console.log(`🎯 Finalizing takeover: ${takeoverAddress} (${isGoalMet ? 'Success' : 'Failed'})`);
       
       let transaction: Transaction;
@@ -138,43 +133,28 @@ export function FinalizeButton({
       let v2TokenMint: string | null = null;
       
       if (isGoalMet) {
-        // Generate V2 mint keypair for successful takeovers (Rust program will create the account)
+        // Create V2 mint for successful takeovers
         console.log('💎 Generating V2 mint keypair for successful takeover...');
         
         v2MintKeypair = Keypair.generate();
         v2TokenMint = v2MintKeypair.publicKey.toBase58();
-        
         console.log('📍 Generated V2 Mint:', v2TokenMint);
         console.log('⚠️  Note: Rust program will create the mint account internally');
         
-        const finalizeIx = createFinalizeInstruction(
-          takeoverPubkey,
-          publicKey,
-          v2MintKeypair.publicKey,
-          programId
-        );
-        
-        // Only add the finalize instruction - let Rust program create the mint
+        // For successful takeovers, just call finalize - the Rust program handles mint creation
+        const finalizeIx = createFinalizeInstruction(takeoverPubkey, publicKey, v2MintKeypair.publicKey);
         transaction = new Transaction().add(finalizeIx);
         
       } else {
-        // For failed takeovers, use a dummy mint (authority's pubkey)
+        // For failed takeovers, use authority as dummy v2_mint
         console.log('❌ Finalizing failed takeover...');
-        v2TokenMint = null;
         
-        const finalizeIx = createFinalizeInstruction(
-          takeoverPubkey,
-          publicKey,
-          publicKey, // Use authority as dummy v2_mint
-          programId
-        );
-        
+        const finalizeIx = createFinalizeInstruction(takeoverPubkey, publicKey, publicKey);
         transaction = new Transaction().add(finalizeIx);
       }
       
       // Set transaction details
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
+      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
       transaction.feePayer = publicKey;
       
       // Sign transaction
@@ -196,28 +176,61 @@ export function FinalizeButton({
       
       console.log('✅ Transaction confirmed, recording in database...');
       
+      // 🔥 IMPROVED: Better payload construction and error handling
+      const payload = {
+        takeoverAddress: takeoverAddress,
+        authority: publicKey.toString(),
+        transactionSignature: signature,
+        isSuccessful: isGoalMet,
+        ...(v2TokenMint && { v2TokenMint }) // Only include v2TokenMint if it exists
+      };
+      
+      console.log('📤 Sending payload to database:', payload);
+      
       // Record finalization in database
       const recordResponse = await fetch('/api/finalize', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          takeoverAddress,
-          authority: publicKey.toString(),
-          transactionSignature: signature,
-          v2TokenMint,
-          isSuccessful: isGoalMet
-        })
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify(payload)
       });
       
+      console.log('🔍 Database response status:', recordResponse.status);
+      console.log('🔍 Database response headers:', Object.fromEntries(recordResponse.headers.entries()));
+      
+      // Get response text first to see what we're dealing with
+      const responseText = await recordResponse.text();
+      console.log('🔍 Raw response:', responseText);
+      
       if (!recordResponse.ok) {
-        throw new Error('Failed to record finalization in database');
+        let errorMessage = `HTTP ${recordResponse.status}`;
+        
+        try {
+          const errorData = JSON.parse(responseText);
+          errorMessage = errorData.error || errorData.message || errorMessage;
+          console.error('🔍 Parsed error data:', errorData);
+        } catch (parseError) {
+          console.error('🔍 Failed to parse error response:', parseError);
+          errorMessage = `${errorMessage}: ${responseText}`;
+        }
+        
+        throw new Error(`Database API error: ${errorMessage}`);
       }
       
-      const recordData = await recordResponse.json();
+      let recordData;
+      try {
+        recordData = JSON.parse(responseText);
+      } catch (parseError) {
+        throw new Error(`Invalid JSON response from database: ${responseText}`);
+      }
       
       if (!recordData.success) {
-        throw new Error(recordData.error);
+        throw new Error(recordData.error || 'Database operation failed');
       }
+      
+      console.log('✅ Successfully recorded in database:', recordData);
       
       toast({
         title: isGoalMet ? "🎉 Takeover Successful!" : "⏰ Takeover Finalized",
@@ -234,9 +247,21 @@ export function FinalizeButton({
       
     } catch (error: any) {
       console.error('❌ Finalization error:', error);
+      
+      // Provide more specific error messages
+      let errorMessage = error.message || 'An error occurred during finalization';
+      
+      if (error.message?.includes('Database API error')) {
+        errorMessage = error.message;
+      } else if (error.message?.includes('Transaction failed')) {
+        errorMessage = 'Blockchain transaction failed: ' + error.message;
+      } else if (error.message?.includes('Invalid JSON')) {
+        errorMessage = 'Database communication error: ' + error.message;
+      }
+      
       toast({
         title: "Finalization Failed",
-        description: error.message || 'An error occurred during finalization',
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {

@@ -1,4 +1,4 @@
-// app/api/finalize/route.ts - Manual finalization for takeover creators
+// app/api/finalize/route.ts - Improved version with better error handling and debugging
 import { NextRequest, NextResponse } from 'next/server';
 import { Pool } from '@neondatabase/serverless';
 import { 
@@ -14,7 +14,7 @@ import {
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const connection = new Connection(
-  process.env.SOLANA_RPC_URL || 'https://api.mainnet-beta.solana.com',
+  process.env.SOLANA_RPC_URL || 'https://api.devnet.solana.com',
   'confirmed'
 );
 
@@ -116,7 +116,21 @@ export async function GET(request: NextRequest) {
 // POST: Verify and record a finalization transaction
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    console.log('🔍 Finalize API: Processing POST request...');
+    
+    // Parse request body
+    let body;
+    try {
+      body = await request.json();
+      console.log('🔍 Finalize API: Received body:', body);
+    } catch (parseError) {
+      console.error('🔍 Finalize API: Failed to parse JSON body:', parseError);
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+    
     const {
       takeoverAddress,
       authority,
@@ -125,98 +139,172 @@ export async function POST(request: NextRequest) {
       isSuccessful
     } = body;
 
+    console.log('🔍 Finalize API: Extracted fields:', {
+      takeoverAddress,
+      authority,
+      transactionSignature,
+      v2TokenMint,
+      isSuccessful
+    });
+
+    // Validate required fields
     if (!takeoverAddress || !authority || !transactionSignature) {
+      const missingFields = [];
+      if (!takeoverAddress) missingFields.push('takeoverAddress');
+      if (!authority) missingFields.push('authority');
+      if (!transactionSignature) missingFields.push('transactionSignature');
+      
+      console.error('🔍 Finalize API: Missing required fields:', missingFields);
       return NextResponse.json(
-        { success: false, error: 'Missing required fields' },
+        { success: false, error: `Missing required fields: ${missingFields.join(', ')}` },
+        { status: 400 }
+      );
+    }
+    
+    // Validate field types and formats
+    try {
+      new PublicKey(takeoverAddress);
+      new PublicKey(authority);
+    } catch (validationError) {
+      console.error('🔍 Finalize API: Invalid public key format:', validationError);
+      return NextResponse.json(
+        { success: false, error: 'Invalid public key format' },
+        { status: 400 }
+      );
+    }
+    
+    if (typeof isSuccessful !== 'boolean') {
+      console.error('🔍 Finalize API: isSuccessful must be boolean, got:', typeof isSuccessful);
+      return NextResponse.json(
+        { success: false, error: 'isSuccessful must be a boolean' },
         { status: 400 }
       );
     }
 
+    console.log('🔍 Finalize API: Connecting to database...');
     const client = await pool.connect();
     
-    // Get takeover details and verify authority
-    const takeoverResult = await client.query(`
-      SELECT * FROM takeovers 
-      WHERE address = $1 AND authority = $2 AND is_finalized = false
-    `, [takeoverAddress, authority]);
-    
-    if (takeoverResult.rows.length === 0) {
-      client.release();
-      return NextResponse.json(
-        { success: false, error: 'Takeover not found or already finalized' },
-        { status: 404 }
-      );
-    }
-    
-    const takeover = takeoverResult.rows[0];
-    
-    // Verify the transaction exists and is confirmed
     try {
-      const tx = await connection.getTransaction(transactionSignature, {
-        commitment: 'confirmed'
-      });
+      // Get takeover details and verify authority
+      console.log('🔍 Finalize API: Querying takeover...');
+      const takeoverResult = await client.query(`
+        SELECT * FROM takeovers 
+        WHERE address = $1 AND authority = $2 AND is_finalized = false
+      `, [takeoverAddress, authority]);
       
-      if (!tx) {
+      if (takeoverResult.rows.length === 0) {
+        console.error('🔍 Finalize API: Takeover not found or already finalized');
+        console.error('🔍 Finalize API: Query params:', { takeoverAddress, authority });
+        
+        // Check if takeover exists at all
+        const anyTakeoverResult = await client.query(`
+          SELECT address, authority, is_finalized FROM takeovers WHERE address = $1
+        `, [takeoverAddress]);
+        
+        if (anyTakeoverResult.rows.length === 0) {
+          console.error('🔍 Finalize API: Takeover does not exist in database');
+        } else {
+          const existing = anyTakeoverResult.rows[0];
+          console.error('🔍 Finalize API: Takeover exists but conditions not met:', existing);
+        }
+        
         client.release();
         return NextResponse.json(
-          { success: false, error: 'Transaction not found or not confirmed' },
+          { success: false, error: 'Takeover not found or already finalized' },
+          { status: 404 }
+        );
+      }
+      
+      const takeover = takeoverResult.rows[0];
+      console.log('🔍 Finalize API: Found takeover:', takeover);
+      
+      // Verify the transaction exists and is confirmed
+      console.log('🔍 Finalize API: Verifying transaction:', transactionSignature);
+      try {
+        const tx = await connection.getTransaction(transactionSignature, {
+          commitment: 'confirmed'
+        });
+        
+        if (!tx) {
+          console.error('🔍 Finalize API: Transaction not found or not confirmed');
+          client.release();
+          return NextResponse.json(
+            { success: false, error: 'Transaction not found or not confirmed' },
+            { status: 400 }
+          );
+        }
+        
+        console.log('🔍 Finalize API: Transaction verified successfully');
+      } catch (error) {
+        console.error('🔍 Finalize API: Transaction verification failed:', error);
+        client.release();
+        return NextResponse.json(
+          { success: false, error: 'Invalid transaction signature' },
           { status: 400 }
         );
       }
-    } catch (error) {
-      client.release();
-      return NextResponse.json(
-        { success: false, error: 'Invalid transaction signature' },
-        { status: 400 }
-      );
-    }
-    
-    // Calculate V2 total supply for successful takeovers
-    let v2TotalSupply = '0';
-    if (isSuccessful && v2TokenMint) {
-      const totalContributed = BigInt(takeover.total_contributed);
-      const rewardRate = parseFloat(takeover.custom_reward_rate);
-      v2TotalSupply = (totalContributed * BigInt(Math.floor(rewardRate * 1000)) / BigInt(1000)).toString();
-    }
-    
-    // Update takeover as finalized
-    await client.query(`
-      UPDATE takeovers 
-      SET 
-        is_finalized = true,
-        is_successful = $1,
-        has_v2_mint = $2,
-        v2_token_mint = $3,
-        v2_total_supply = $4,
-        finalize_tx = $5,
-        finalized_at = NOW()
-      WHERE id = $6
-    `, [
-      isSuccessful, 
-      isSuccessful && v2TokenMint ? true : false,
-      v2TokenMint || null,
-      v2TotalSupply,
-      transactionSignature,
-      takeover.id
-    ]);
-    
-    client.release();
-    
-    return NextResponse.json({
-      success: true,
-      takeover: {
-        id: takeover.id,
-        address: takeoverAddress,
-        tokenName: takeover.token_name,
-        isSuccessful,
-        v2TokenMint,
-        transactionSignature,
-        finalizedAt: new Date().toISOString()
+      
+      // Calculate V2 total supply for successful takeovers
+      let v2TotalSupply = '0';
+      if (isSuccessful && v2TokenMint) {
+        const totalContributed = BigInt(takeover.total_contributed);
+        const rewardRate = parseFloat(takeover.custom_reward_rate);
+        v2TotalSupply = (totalContributed * BigInt(Math.floor(rewardRate * 1000)) / BigInt(1000)).toString();
+        console.log('🔍 Finalize API: Calculated V2 total supply:', v2TotalSupply);
       }
-    });
+      
+      // Update takeover as finalized
+      console.log('🔍 Finalize API: Updating takeover in database...');
+      const updateResult = await client.query(`
+        UPDATE takeovers 
+        SET 
+          is_finalized = true,
+          is_successful = $1,
+          has_v2_mint = $2,
+          v2_token_mint = $3,
+          v2_total_supply = $4,
+          finalize_tx = $5,
+          finalized_at = NOW()
+        WHERE id = $6
+        RETURNING *
+      `, [
+        isSuccessful, 
+        isSuccessful && v2TokenMint ? true : false,
+        v2TokenMint || null,
+        v2TotalSupply,
+        transactionSignature,
+        takeover.id
+      ]);
+      
+      if (updateResult.rows.length === 0) {
+        throw new Error('Failed to update takeover in database');
+      }
+      
+      console.log('🔍 Finalize API: Successfully updated takeover:', updateResult.rows[0]);
+      
+      client.release();
+      
+      return NextResponse.json({
+        success: true,
+        takeover: {
+          id: takeover.id,
+          address: takeoverAddress,
+          tokenName: takeover.token_name,
+          isSuccessful,
+          v2TokenMint,
+          transactionSignature,
+          finalizedAt: new Date().toISOString()
+        }
+      });
+      
+    } catch (dbError) {
+      console.error('🔍 Finalize API: Database error:', dbError);
+      client.release();
+      throw dbError;
+    }
     
   } catch (error: any) {
-    console.error('Error processing finalization:', error);
+    console.error('🔍 Finalize API: Unexpected error:', error);
     return NextResponse.json(
       { success: false, error: error.message },
       { status: 500 }
