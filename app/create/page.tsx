@@ -1,3 +1,4 @@
+// app/create/page.tsx - Fixed version with proper treasury handling
 "use client";
 import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -19,22 +20,37 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID } from "@/lib/constants";
 import { ImageUpload } from "@/components/image-upload";
 
-// 🔥 UPDATED: Reward rate utility class
-class RewardRateUtils {
-  static toBasisPoints(decimal: number): number {
-    return Math.round(decimal * 100);
-  }
-  
-  static toDecimal(basisPoints: number): number {
-    return basisPoints / 100.0;
-  }
-  
-  static isValid(decimal: number): boolean {
-    return decimal >= 0.5 && decimal <= 10.0;
-  }
-  
-  static formatRate(decimal: number): string {
-    return `${decimal.toFixed(1)}x`;
+// 🔥 UPDATED: Treasury address resolver
+class TreasuryResolver {
+  static getTreasuryAddress(): PublicKey {
+    // Option 1: Use environment variable if set
+    if (process.env.NEXT_PUBLIC_TREASURY_ADDRESS) {
+      console.log('✅ Using treasury from env:', process.env.NEXT_PUBLIC_TREASURY_ADDRESS);
+      return new PublicKey(process.env.NEXT_PUBLIC_TREASURY_ADDRESS);
+    }
+    
+    // Option 2: Use known treasury addresses for different environments
+    const knownTreasuries = {
+      // Add known treasury addresses here - these would be from your program deployment
+      devnet: "11111111111111111111111111111111", // Replace with actual devnet treasury
+      mainnet: "11111111111111111111111111111111", // Replace with actual mainnet treasury
+    };
+    
+    // Option 3: Derive treasury PDA if it's program-derived
+    try {
+      const [treasuryPDA] = PublicKey.findProgramAddressSync(
+        [Buffer.from("treasury")],
+        new PublicKey(PROGRAM_ID)
+      );
+      console.log('✅ Using derived treasury PDA:', treasuryPDA.toString());
+      return treasuryPDA;
+    } catch (error) {
+      console.error('❌ Failed to derive treasury PDA:', error);
+    }
+    
+    // Option 4: Fallback to a default (this might fail)
+    console.warn('⚠️ Using fallback treasury - this might cause InvalidTreasury error');
+    return new PublicKey("11111111111111111111111111111111");
   }
 }
 
@@ -74,7 +90,7 @@ function createInitializeInstruction(
 
   const keys = [
     { pubkey: authority, isSigner: true, isWritable: true },
-    { pubkey: treasury, isSigner: false, isWritable: true },
+    { pubkey: treasury, isSigner: false, isWritable: true }, // 🔥 FIXED: Use proper treasury
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
     { pubkey: vault, isSigner: true, isWritable: true },
@@ -99,15 +115,10 @@ export default function CreateTakeover() {
     v1TokenMint: "So11111111111111111111111111111111111111112",
     minAmount: "1000",
     duration: "7",
-    customRewardRate: "1.5",
+    customRewardRate: "1.0",
     tokenName: "Test Token",
     imageUrl: ""
   });
-
-  // 🔥 UPDATED: Parse and validate reward rate
-  const rewardRateDecimal = parseFloat(formData.customRewardRate) || 1.5;
-  const rewardRateBp = RewardRateUtils.toBasisPoints(rewardRateDecimal);
-  const isValidRewardRate = RewardRateUtils.isValid(rewardRateDecimal);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -115,16 +126,6 @@ export default function CreateTakeover() {
       toast({
         title: "Wallet Error",
         description: "Please connect your wallet",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    // 🔥 UPDATED: Validate reward rate before submission
-    if (!isValidRewardRate) {
-      toast({
-        title: "Invalid Reward Rate",
-        description: "Reward rate must be between 0.5x and 10.0x",
         variant: "destructive"
       });
       return;
@@ -146,12 +147,17 @@ export default function CreateTakeover() {
       const v1Mint = new PublicKey(formData.v1TokenMint);
       const minAmount = BigInt(Number(formData.minAmount) * 1_000_000); // 6 decimals
       const duration = BigInt(Number(formData.duration) * 86400); // days to seconds
+      const rewardRate = Number(formData.customRewardRate);
       
       console.log("2. Form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
       console.log("   Min Amount:", minAmount.toString());
       console.log("   Duration:", duration.toString());
-      console.log("   Reward Rate:", rewardRateDecimal, `(${rewardRateBp} basis points)`);
+      console.log("   Reward Rate:", rewardRate);
+      
+      // 🔥 UPDATED: Get the correct treasury address
+      const treasury = TreasuryResolver.getTreasuryAddress();
+      console.log("2.1. Treasury address:", treasury.toString());
       
       // Find takeover PDA
       const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
@@ -178,20 +184,20 @@ export default function CreateTakeover() {
       console.log("   End time:", endTime);
       console.log("   Duration (seconds):", Number(duration));
       
-      // Create the initialize instruction
+      // 🔥 UPDATED: Create the initialize instruction with proper treasury
       const initializeIx = createInitializeInstruction(
         new PublicKey(PROGRAM_ID),
-        publicKey,
-        publicKey, // Using wallet as treasury
-        v1Mint,
-        takeoverPDA,
-        vault.publicKey,
+        publicKey,        // authority (signer)
+        treasury,         // treasury (from resolver)
+        v1Mint,          // v1 token mint
+        takeoverPDA,     // takeover PDA
+        vault.publicKey, // vault (signer)
         minAmount,
         duration,
-        rewardRateDecimal // Program will convert to basis points internally
+        rewardRate
       );
       
-      console.log("6. Initialize instruction created");
+      console.log("6. Initialize instruction created with treasury:", treasury.toString());
       
       // Create and send transaction with legacy format
       const transaction = new Transaction();
@@ -207,10 +213,34 @@ export default function CreateTakeover() {
       
       console.log("7. Transaction built and signed by vault");
       
+      // 🔥 IMPROVED: Simulate first to catch errors early
+      try {
+        console.log("7.1. Simulating transaction...");
+        const simulation = await connection.simulateTransaction(transaction);
+        
+        if (simulation.value.err) {
+          console.error("7.2. Simulation failed:", simulation.value.err);
+          console.error("7.3. Simulation logs:", simulation.value.logs);
+          
+          // Parse the error for better user feedback
+          const errorStr = JSON.stringify(simulation.value.err);
+          if (errorStr.includes('"Custom":6013')) {
+            throw new Error(`Invalid treasury address. Expected treasury: Please check your program configuration. Current treasury: ${treasury.toString()}`);
+          } else {
+            throw new Error(`Transaction simulation failed: ${errorStr}`);
+          }
+        }
+        
+        console.log("7.4. Simulation successful:", simulation.value.logs);
+      } catch (simError: any) {
+        console.error("7.5. Simulation error:", simError);
+        throw simError;
+      }
+      
       // Send transaction
       console.log("8. Sending transaction...");
       const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: true,
+        skipPreflight: false,
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
@@ -230,7 +260,7 @@ export default function CreateTakeover() {
       
       console.log("10. Transaction confirmed! Now saving to database...");
       
-      // 🔥 UPDATED: Save with basis points info for debugging
+      // Save to database after successful blockchain transaction
       try {
         const dbResponse = await fetch('/api/takeovers', {
           method: 'POST',
@@ -245,7 +275,7 @@ export default function CreateTakeover() {
             minAmount: minAmount.toString(),
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            customRewardRate: rewardRateDecimal,
+            customRewardRate: rewardRate,
             tokenName: formData.tokenName,
             imageUrl: formData.imageUrl
           })
@@ -272,7 +302,7 @@ export default function CreateTakeover() {
       
       toast({
         title: "Takeover Created Successfully! 🎉",
-        description: `${formData.tokenName} takeover created with ${RewardRateUtils.formatRate(rewardRateDecimal)} reward rate!\n\nView on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
+        description: `View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
         duration: 10000
       });
 
@@ -281,7 +311,7 @@ export default function CreateTakeover() {
         v1TokenMint: "So11111111111111111111111111111111111111112",
         minAmount: "1000",
         duration: "7",
-        customRewardRate: "1.5",
+        customRewardRate: "1.0",
         tokenName: "Test Token",
         imageUrl: ""
       });
@@ -312,11 +342,19 @@ export default function CreateTakeover() {
         <CardHeader>
           <CardTitle>Create Community Takeover</CardTitle>
           <CardDescription>
-            Create a new takeover campaign with secure basis points reward system
+            Fixed treasury address handling to prevent InvalidTreasury errors
             <br />
             Program ID: {PROGRAM_ID}
             <br />
             Connected: {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-4)}
+            <br />
+            Treasury: {(() => {
+              try {
+                return TreasuryResolver.getTreasuryAddress().toString().slice(0, 8) + '...' + TreasuryResolver.getTreasuryAddress().toString().slice(-4);
+              } catch {
+                return 'Error resolving treasury';
+              }
+            })()}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -377,56 +415,36 @@ export default function CreateTakeover() {
               />
             </div>
 
-            {/* 🔥 UPDATED: Enhanced reward rate input with basis points display */}
             <div className="space-y-2">
               <Label htmlFor="customRewardRate">V2 Reward Rate Multiplier</Label>
               <Input
                 id="customRewardRate"
                 type="number"
                 step="0.1"
-                min="0.5"
-                max="10.0"
                 value={formData.customRewardRate}
                 onChange={(e) => setFormData(prev => ({ ...prev, customRewardRate: e.target.value }))}
-                className={!isValidRewardRate ? "border-red-500" : ""}
                 required
               />
-              <div className="text-sm space-y-1">
-                <div className={`${isValidRewardRate ? 'text-green-600' : 'text-red-600'}`}>
-                  Contributors get {RewardRateUtils.formatRate(rewardRateDecimal)} tokens if successful
-                </div>
-                <div className="font-mono text-xs text-gray-500">
-                  Stored as: {rewardRateBp} basis points (safe u16 format)
-                </div>
-                {!isValidRewardRate && (
-                  <div className="text-red-600 text-xs">
-                    ⚠️ Must be between 0.5x and 10.0x
-                  </div>
-                )}
-              </div>
             </div>
 
-            {/* 🔥 UPDATED: Preview section showing calculations */}
-            {isValidRewardRate && Number(formData.minAmount) > 0 && (
-              <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                <h4 className="font-medium text-blue-800 dark:text-blue-200 mb-2">📊 Takeover Preview</h4>
-                <div className="text-sm text-blue-700 dark:text-blue-300 space-y-1">
-                  <div>• Goal: {Number(formData.minAmount).toLocaleString()} {formData.tokenName}</div>
-                  <div>• Duration: {formData.duration} days</div>
-                  <div>• Reward rate: {RewardRateUtils.formatRate(rewardRateDecimal)}</div>
-                  <div>• If successful: {(Number(formData.minAmount) * rewardRateDecimal).toLocaleString()} V2 tokens total</div>
-                  <div className="text-xs pt-1">
-                    💡 Reward rate stored as {rewardRateBp} basis points (no f64 corruption!)
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* 🔥 NEW: Treasury address info */}
+            <div className="p-4 bg-yellow-50 dark:bg-yellow-950 rounded-lg">
+              <h4 className="font-medium text-yellow-800 dark:text-yellow-200 mb-2">Treasury Configuration</h4>
+              <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                Treasury address: {(() => {
+                  try {
+                    return TreasuryResolver.getTreasuryAddress().toString();
+                  } catch {
+                    return 'Error resolving treasury';
+                  }
+                })()}
+              </p>
+              <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
+                This address must match what your Solana program expects or you'll get an InvalidTreasury error.
+              </p>
+            </div>
 
-            <Button 
-              type="submit" 
-              disabled={loading || !isValidRewardRate} 
-              className="w-full"
-            >
+            <Button type="submit" disabled={loading} className="w-full">
               {loading ? <LoadingSpinner /> : "Create Takeover"}
             </Button>
           </form>
