@@ -1,11 +1,8 @@
-"use client";
-
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { lpSimulator, PoolAnalytics, SwapResult } from "@/lib/lp-simulator";
@@ -31,27 +28,45 @@ export function PoolAnalyticsComponent({
   const [swapDirection, setSwapDirection] = useState<'SOL' | 'TOKEN'>('SOL');
   const [swapResult, setSwapResult] = useState<SwapResult | null>(null);
   const [currentPoolId, setCurrentPoolId] = useState(poolId);
+  const [poolExists, setPoolExists] = useState(true);
   const { toast } = useToast();
 
   useEffect(() => {
-    // Auto-create pool if we have the necessary data but no poolId
-    if (!currentPoolId && tokenMint && tokenSymbol && initialSolAmount && initialTokenAmount) {
+    // Check if pool exists or needs to be created
+    if (currentPoolId) {
+      // First check if the pool exists
+      const pool = lpSimulator.getPool(currentPoolId);
+      if (pool) {
+        setPoolExists(true);
+        fetchAnalytics();
+      } else {
+        // Pool doesn't exist, try to recreate if we have the data
+        setPoolExists(false);
+        if (tokenMint && tokenSymbol && initialSolAmount && initialTokenAmount) {
+          console.log('Pool not found, recreating...');
+          createPool();
+        } else {
+          // Clear the currentPoolId since the pool doesn't exist and we can't recreate it
+          setCurrentPoolId(undefined);
+          setAnalytics(null);
+        }
+      }
+    } else if (tokenMint && tokenSymbol && initialSolAmount && initialTokenAmount) {
+      // Auto-create pool if we have the necessary data but no poolId
       createPool();
-    } else if (currentPoolId) {
-      fetchAnalytics();
     }
   }, [currentPoolId, tokenMint, tokenSymbol, initialSolAmount, initialTokenAmount]);
 
   useEffect(() => {
-    // Refresh analytics every 10 seconds
+    // Refresh analytics every 10 seconds, but only if pool exists
     const interval = setInterval(() => {
-      if (currentPoolId) {
+      if (currentPoolId && poolExists) {
         fetchAnalytics();
       }
     }, 10000);
 
     return () => clearInterval(interval);
-  }, [currentPoolId]);
+  }, [currentPoolId, poolExists]);
 
   const createPool = async () => {
     if (!tokenMint || !tokenSymbol || !initialSolAmount || !initialTokenAmount) return;
@@ -68,6 +83,7 @@ export function PoolAnalyticsComponent({
       });
 
       setCurrentPoolId(pool.id);
+      setPoolExists(true);
       
       toast({
         title: "Pool Created! 🏊",
@@ -78,6 +94,7 @@ export function PoolAnalyticsComponent({
       await fetchAnalytics();
     } catch (error: any) {
       console.error('Error creating pool:', error);
+      setPoolExists(false);
       toast({
         title: "Pool Creation Failed",
         description: error.message,
@@ -92,20 +109,49 @@ export function PoolAnalyticsComponent({
     if (!currentPoolId) return;
 
     try {
+      // First verify the pool exists
+      const pool = lpSimulator.getPool(currentPoolId);
+      if (!pool) {
+        console.warn(`Pool ${currentPoolId} not found, marking as non-existent`);
+        setPoolExists(false);
+        setAnalytics(null);
+        
+        // Try to recreate if we have the data
+        if (tokenMint && tokenSymbol && initialSolAmount && initialTokenAmount) {
+          createPool();
+        }
+        return;
+      }
+
       const poolAnalytics = lpSimulator.getPoolAnalytics(currentPoolId);
       setAnalytics(poolAnalytics);
+      setPoolExists(true);
     } catch (error: any) {
       console.error('Error fetching analytics:', error);
-      toast({
-        title: "Analytics Error",
-        description: error.message,
-        variant: "destructive"
-      });
+      
+      if (error.message === 'Pool not found') {
+        setPoolExists(false);
+        setAnalytics(null);
+        
+        // Try to recreate if we have the data
+        if (tokenMint && tokenSymbol && initialSolAmount && initialTokenAmount) {
+          console.log('Pool not found during analytics fetch, recreating...');
+          createPool();
+        } else {
+          setCurrentPoolId(undefined);
+        }
+      } else {
+        toast({
+          title: "Analytics Error",
+          description: error.message,
+          variant: "destructive"
+        });
+      }
     }
   };
 
   const simulateSwap = () => {
-    if (!currentPoolId || !swapAmount) return;
+    if (!currentPoolId || !swapAmount || !poolExists) return;
 
     try {
       const amount = Number(swapAmount);
@@ -129,16 +175,22 @@ export function PoolAnalyticsComponent({
       });
     } catch (error: any) {
       console.error('Swap simulation error:', error);
-      toast({
-        title: "Swap Simulation Failed",
-        description: error.message,
-        variant: "destructive"
-      });
+      
+      if (error.message === 'Pool not found') {
+        setPoolExists(false);
+        createPool();
+      } else {
+        toast({
+          title: "Swap Simulation Failed",
+          description: error.message,
+          variant: "destructive"
+        });
+      }
     }
   };
 
   const executeSwap = () => {
-    if (!currentPoolId || !swapAmount) return;
+    if (!currentPoolId || !swapAmount || !poolExists) return;
 
     try {
       const amount = Number(swapAmount);
@@ -164,11 +216,17 @@ export function PoolAnalyticsComponent({
       });
     } catch (error: any) {
       console.error('Swap execution error:', error);
-      toast({
-        title: "Swap Execution Failed",
-        description: error.message,
-        variant: "destructive"
-      });
+      
+      if (error.message === 'Pool not found') {
+        setPoolExists(false);
+        createPool();
+      } else {
+        toast({
+          title: "Swap Execution Failed",
+          description: error.message,
+          variant: "destructive"
+        });
+      }
     }
   };
 
@@ -183,13 +241,16 @@ export function PoolAnalyticsComponent({
     );
   }
 
-  if (!currentPoolId) {
+  if (!currentPoolId || !poolExists) {
     return (
       <Card>
         <CardHeader>
           <CardTitle>Pool Simulation</CardTitle>
           <CardDescription>
-            No pool simulation available. Create a takeover first or provide pool parameters.
+            {!poolExists ? 
+              "Pool simulation expired. Create a new one below." : 
+              "No pool simulation available. Create a takeover first or provide pool parameters."
+            }
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -225,9 +286,16 @@ export function PoolAnalyticsComponent({
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span>🏊 {tokenSymbol}/SOL Pool Simulation</span>
-            <Button onClick={fetchAnalytics} variant="outline" size="sm">
-              Refresh
-            </Button>
+            <div className="flex gap-2">
+              <Button onClick={fetchAnalytics} variant="outline" size="sm">
+                Refresh
+              </Button>
+              {!poolExists && (
+                <Button onClick={createPool} size="sm" variant="secondary">
+                  Recreate Pool
+                </Button>
+              )}
+            </div>
           </CardTitle>
           <CardDescription>
             Live simulation of a {tokenSymbol}/SOL liquidity pool
@@ -283,7 +351,7 @@ export function PoolAnalyticsComponent({
               <div className="flex items-center justify-between mb-2">
                 <span className="font-medium">SOL Reserves</span>
                 <span className="text-xs bg-orange-100 dark:bg-orange-900 px-2 py-1 rounded">
-                  {((analytics.solReserve / analytics.totalValueLocked) * 100).toFixed(1)}%
+                  {((analytics.solReserve / (analytics.solReserve + analytics.tokenReserve * analytics.currentPrice)) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="text-2xl font-bold">
@@ -296,7 +364,7 @@ export function PoolAnalyticsComponent({
               <div className="flex items-center justify-between mb-2">
                 <span className="font-medium">{tokenSymbol} Reserves</span>
                 <span className="text-xs bg-blue-100 dark:bg-blue-900 px-2 py-1 rounded">
-                  {(((analytics.tokenReserve * analytics.currentPrice) / analytics.totalValueLocked) * 100).toFixed(1)}%
+                  {(((analytics.tokenReserve * analytics.currentPrice) / (analytics.solReserve + analytics.tokenReserve * analytics.currentPrice)) * 100).toFixed(1)}%
                 </span>
               </div>
               <div className="text-2xl font-bold">
@@ -313,7 +381,7 @@ export function PoolAnalyticsComponent({
         <CardHeader>
           <CardTitle>Swap Simulator</CardTitle>
           <CardDescription>
-            Test swaps without affecting the actual pool state
+            Test swaps and execute trades in the simulation
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -351,10 +419,10 @@ export function PoolAnalyticsComponent({
           </div>
 
           <div className="flex gap-2">
-            <Button onClick={simulateSwap} variant="outline" className="flex-1">
+            <Button onClick={simulateSwap} variant="outline" className="flex-1" disabled={!poolExists}>
               Simulate Swap
             </Button>
-            <Button onClick={executeSwap} className="flex-1">
+            <Button onClick={executeSwap} className="flex-1" disabled={!poolExists}>
               Execute Test Swap
             </Button>
           </div>
