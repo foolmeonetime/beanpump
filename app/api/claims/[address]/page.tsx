@@ -1,4 +1,4 @@
-// app/claim/[address]/page.tsx - Compatible version without Badge/Alert components
+// app/claim/[address]/page.tsx - Updated for new airdrop_v2_liquidity instruction
 "use client";
 
 import { useEffect, useState } from "react";
@@ -11,10 +11,12 @@ import { useToast } from "@/components/ui/use-toast";
 import { 
   PublicKey, 
   Transaction,
-  TransactionInstruction
+  TransactionInstruction,
+  SystemProgram
 } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import Link from "next/link";
+import { PROGRAM_ID } from "@/lib/constants";
 
 interface ClaimDetails {
   id: number;
@@ -32,6 +34,7 @@ interface ClaimDetails {
   v2TokenMint?: string;
   refundAmount: string;
   rewardAmount: string;
+  takeoverAuthority?: string;
 }
 
 interface ClaimPageProps {
@@ -40,8 +43,71 @@ interface ClaimPageProps {
   };
 }
 
+// Helper function to get associated token address
+function getAssociatedTokenAddressLegacy(mint: PublicKey, owner: PublicKey): PublicKey {
+  const [address] = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+  );
+  return address;
+}
+
+// Helper function to create ATA instruction
+function createAssociatedTokenAccountInstructionLegacy(
+  payer: PublicKey,
+  associatedToken: PublicKey,
+  owner: PublicKey,
+  mint: PublicKey
+): TransactionInstruction {
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: payer, isSigner: true, isWritable: true },
+      { pubkey: associatedToken, isSigner: false, isWritable: true },
+      { pubkey: owner, isSigner: false, isWritable: false },
+      { pubkey: mint, isSigner: false, isWritable: false },
+      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
+      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
+    ],
+    programId: new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"),
+    data: Buffer.from([]),
+  });
+}
+
+// Function to create airdrop_v2_liquidity instruction manually
+function createAirdropV2LiquidityInstruction(
+  programId: PublicKey,
+  authority: PublicKey,
+  contributor: PublicKey,
+  takeover: PublicKey,
+  contributorAccount: PublicKey,
+  v2Mint: PublicKey,
+  contributorAta: PublicKey,
+  vault: PublicKey
+): TransactionInstruction {
+  // New discriminator for airdrop_v2_liquidity from the updated IDL
+  const discriminator = Buffer.from([245, 217, 224, 30, 170, 53, 154, 197]);
+
+  const keys = [
+    { pubkey: authority, isSigner: true, isWritable: true },
+    { pubkey: contributor, isSigner: true, isWritable: true },
+    { pubkey: takeover, isSigner: false, isWritable: true },
+    { pubkey: contributorAccount, isSigner: false, isWritable: true },
+    { pubkey: v2Mint, isSigner: false, isWritable: true },
+    { pubkey: contributorAta, isSigner: false, isWritable: true },
+    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+  ];
+
+  return new TransactionInstruction({
+    keys,
+    programId,
+    data: discriminator, // No additional parameters for airdrop_v2_liquidity
+  });
+}
+
 export default function ClaimPage({ params }: ClaimPageProps) {
-  const { publicKey, signTransaction } = useWallet();
+  const { publicKey, signTransaction, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const [claims, setClaims] = useState<ClaimDetails[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,7 +152,8 @@ export default function ClaimPage({ params }: ClaimPageProps) {
         v1TokenMint: claim.v1TokenMint,
         v2TokenMint: claim.v2TokenMint,
         refundAmount: claim.refundAmount,
-        rewardAmount: claim.rewardAmount
+        rewardAmount: claim.rewardAmount,
+        takeoverAuthority: claim.takeoverAuthority
       }));
       
       setClaims(transformedClaims);
@@ -112,69 +179,79 @@ export default function ClaimPage({ params }: ClaimPageProps) {
     try {
       setClaiming(claim.id.toString());
       
-      // Create claim instruction
-      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+      console.log("🎁 Starting billion-scale claim with conservative liquidity mode...");
+      
       const takeoverPubkey = new PublicKey(claim.takeoverAddress);
       const vaultPubkey = new PublicKey(claim.vault);
+      const mintPubkey = new PublicKey(claim.tokenMint);
+      const authorityPubkey = new PublicKey(claim.takeoverAuthority || claim.takeoverAddress); // Fallback if no authority
       
-      // Create the claim instruction based on your program's airdrop_v2 instruction
-      const claimInstruction = new TransactionInstruction({
-        keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },        // authority (contributor)
-          { pubkey: publicKey, isSigner: true, isWritable: true },        // contributor
-          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },  // takeover
-          // contributor_account PDA would need to be calculated here
-          // v2_mint, contributor_ata, vault would need the actual addresses
-          { pubkey: vaultPubkey, isSigner: false, isWritable: true },     // vault
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
+      console.log("💰 Billion-scale claim details:");
+      console.log("   Is successful:", claim.isSuccessful);
+      console.log("   Using mint:", mintPubkey.toString());
+      console.log("   Original contribution:", Number(claim.contributionAmount) / 1_000_000, "tokens");
+      console.log("   Conservative billion-scale mode with 2% safety cushion");
+
+      // Create contributor PDA
+      const [contributorPDA] = PublicKey.findProgramAddressSync(
+        [
+          Buffer.from("contributor"),
+          takeoverPubkey.toBuffer(),
+          publicKey.toBuffer()
         ],
-        programId,
-        data: Buffer.from([140, 11, 185, 155, 26, 142, 21, 45]) // airdrop_v2 discriminator from IDL
-      });
+        new PublicKey(PROGRAM_ID)
+      );
 
-      const transaction = new Transaction().add(claimInstruction);
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
-      transaction.feePayer = publicKey;
+      const userTokenAccount = getAssociatedTokenAddressLegacy(mintPubkey, publicKey);
+      let tx = new Transaction();
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
 
-      console.log('🔐 Signing transaction...');
-      const signedTransaction = await signTransaction(transaction);
-      
-      console.log('📤 Sending transaction...');
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize());
-      
-      console.log('⏳ Waiting for confirmation...', signature);
-      // Wait for confirmation
-      await connection.confirmTransaction(signature, 'confirmed');
-      
-      console.log('✅ Transaction confirmed, recording claim...');
-      
-      // Record the claim in the database
-      const recordResponse = await fetch('/api/claims', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contributionId: claim.id,
-          contributor: publicKey.toString(),
-          takeoverAddress: claim.takeoverAddress,
-          transactionSignature: signature
-        })
-      });
-      
-      if (!recordResponse.ok) {
-        throw new Error('Failed to record claim in database');
+      // Create ATA if it doesn't exist
+      try {
+        await connection.getAccountInfo(userTokenAccount);
+      } catch {
+        tx.add(createAssociatedTokenAccountInstructionLegacy(
+          publicKey,
+          userTokenAccount,
+          publicKey,
+          mintPubkey
+        ));
       }
+
+      // Use the new airdrop_v2_liquidity instruction
+      const airdropIx = createAirdropV2LiquidityInstruction(
+        new PublicKey(PROGRAM_ID),
+        authorityPubkey, // authority (must be takeover authority)
+        publicKey, // contributor
+        takeoverPubkey, // takeover
+        contributorPDA, // contributor_account
+        mintPubkey, // v2_mint (or v1_mint for refunds)
+        userTokenAccount, // contributor_ata
+        vaultPubkey // vault
+      );
+
+      tx.add(airdropIx);
       
-      const recordData = await recordResponse.json();
+      console.log("🔐 Signing billion-scale liquidity transaction...");
+      const signature = await sendTransaction(tx, connection);
       
-      if (!recordData.success) {
-        throw new Error(recordData.error);
-      }
-      
+      console.log("⏳ Waiting for confirmation...", signature);
+      await connection.confirmTransaction(signature, "confirmed");
+
+      // Calculate the actual amount the user will receive
+      const expectedAmount = claim.isSuccessful 
+        ? Number(claim.contributionAmount) * claim.customRewardRate
+        : Number(claim.contributionAmount);
+
+      console.log("✅ Billion-scale claim successful!");
+      console.log("   Expected amount:", expectedAmount / 1_000_000, claim.isSuccessful ? 'V2' : 'V1', "tokens");
+      console.log("   Conservative allocation with safety margin applied");
+
       toast({
-        title: "🎉 Claim Successful!",
-        description: `Successfully claimed ${Number(claim.claimableAmount) / 1_000_000} ${
-          claim.claimType === 'reward' ? 'V2 tokens' : claim.tokenName
-        }`,
+        title: "🎉 Billion-Scale Claim Successful!",
+        description: `Conservative liquidity claim completed! Expected: ${(expectedAmount / 1_000_000).toLocaleString()} ${claim.isSuccessful ? 'V2' : 'V1'} tokens`,
         duration: 8000
       });
       
@@ -184,10 +261,10 @@ export default function ClaimPage({ params }: ClaimPageProps) {
       }, 2000);
       
     } catch (error: any) {
-      console.error('❌ Claim error:', error);
+      console.error("❌ Billion-scale claim error:", error);
       toast({
         title: "Claim Failed",
-        description: error.message || 'An error occurred while processing your claim',
+        description: error.message || 'An error occurred during billion-scale claim',
         variant: "destructive"
       });
     } finally {
@@ -207,7 +284,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
         <Card>
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">Wallet Required</h2>
-            <p className="text-gray-600 mb-4">Please connect your wallet to view and process claims.</p>
+            <p className="text-gray-600 mb-4">Please connect your wallet to view and process billion-scale claims.</p>
           </CardContent>
         </Card>
       </div>
@@ -220,7 +297,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
         <Card>
           <CardContent className="pt-6 text-center">
             <LoadingSpinner />
-            <p className="text-sm text-gray-500 mt-2">Loading claims...</p>
+            <p className="text-sm text-gray-500 mt-2">Loading billion-scale claims...</p>
           </CardContent>
         </Card>
       </div>
@@ -248,7 +325,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don't have any claimable contributions for this takeover.
+              You don't have any claimable contributions for this billion-scale takeover.
             </p>
             <Link href="/">
               <Button>Back to Takeovers</Button>
@@ -264,9 +341,9 @@ export default function ClaimPage({ params }: ClaimPageProps) {
   return (
     <div className="max-w-2xl mx-auto p-6 space-y-6">
       <div className="text-center">
-        <h1 className="text-3xl font-bold mb-2">Claim Your Tokens</h1>
+        <h1 className="text-3xl font-bold mb-2">Claim Your Billion-Scale Tokens</h1>
         <p className="text-gray-600">
-          Process your claims for the {claims[0]?.tokenName} takeover
+          Process your claims for the {claims[0]?.tokenName} billion-scale takeover with conservative safety features
         </p>
       </div>
 
@@ -274,13 +351,15 @@ export default function ClaimPage({ params }: ClaimPageProps) {
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
-            <span>Claim Summary</span>
+            <span>Billion-Scale Claim Summary</span>
             <span className="text-xs px-2 py-1 bg-gray-100 text-gray-600 rounded-full">
               {claims.length} Claim{claims.length !== 1 ? 's' : ''}
             </span>
           </CardTitle>
           <CardDescription>
             Takeover Address: {params.address.slice(0, 8)}...{params.address.slice(-4)}
+            <br />
+            Conservative billion-scale mode with 2% safety cushion
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -291,7 +370,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
             </div>
             <div>
               <span className="font-medium">Claim Type:</span><br />
-              {claims[0]?.claimType === 'reward' ? '🎉 Reward Tokens' : '💰 Refund'}
+              {claims[0]?.claimType === 'reward' ? '🎉 Conservative Reward Tokens' : '💰 Refund'}
             </div>
           </div>
         </CardContent>
@@ -308,7 +387,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
             <Card key={claim.id}>
               <CardHeader>
                 <CardTitle className="flex items-center justify-between text-lg">
-                  <span>Contribution #{claim.id}</span>
+                  <span>Billion-Scale Contribution #{claim.id}</span>
                   <span 
                     className={`text-xs px-2 py-1 rounded-full ${
                       claim.isSuccessful 
@@ -328,11 +407,11 @@ export default function ClaimPage({ params }: ClaimPageProps) {
                   </div>
                   <div>
                     <span className="font-medium">
-                      {claim.isSuccessful ? 'Reward Amount:' : 'Refund Amount:'}
+                      {claim.isSuccessful ? 'Conservative Reward Amount:' : 'Refund Amount:'}
                     </span><br />
                     {claimableTokens.toLocaleString()}{' '}
                     {claim.isSuccessful 
-                      ? `V2 tokens (${claim.customRewardRate}x)` 
+                      ? `V2 tokens (${claim.customRewardRate}x conservative rate)` 
                       : claim.tokenName
                     }
                   </div>
@@ -340,9 +419,12 @@ export default function ClaimPage({ params }: ClaimPageProps) {
                 
                 {claim.isSuccessful && claim.v2TokenMint && (
                   <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
-                    <h4 className="font-medium text-green-800 mb-1">V2 Token Details</h4>
+                    <h4 className="font-medium text-green-800 mb-1">🛡️ Conservative V2 Token Details</h4>
                     <div className="text-xs font-mono text-green-600">
                       {claim.v2TokenMint}
+                    </div>
+                    <div className="text-xs text-green-600 mt-1">
+                      Allocated with 2% safety cushion and billion-scale overflow protection
                     </div>
                   </div>
                 )}
@@ -363,7 +445,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
                     </div>
                   ) : (
                     <>
-                      {claim.isSuccessful ? '🎉 Claim Reward' : '💰 Claim Refund'}
+                      {claim.isSuccessful ? '🎉 Claim Conservative Reward' : '💰 Claim Refund'}
                     </>
                   )}
                 </Button>
@@ -372,6 +454,19 @@ export default function ClaimPage({ params }: ClaimPageProps) {
           );
         })}
       </div>
+
+      {/* Info Card */}
+      <Card className="bg-blue-50 border-blue-200">
+        <CardContent className="pt-6">
+          <h3 className="font-medium text-blue-800 mb-2">🛡️ Billion-Scale Safety Features</h3>
+          <div className="text-sm text-blue-700 space-y-1">
+            <p>• Conservative reward calculations with 2% safety cushion</p>
+            <p>• Maximum 2.0x reward rate for sustainability</p>
+            <p>• Overflow protection for billion-token economies</p>
+            <p>• Proportionate allocation based on total supply</p>
+          </div>
+        </CardContent>
+      </Card>
 
       {/* Back Link */}
       <div className="text-center">

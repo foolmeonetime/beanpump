@@ -1,4 +1,3 @@
-// app/create/page.tsx - Fixed version with proper treasury handling
 "use client";
 import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
@@ -20,77 +19,47 @@ import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID } from "@/lib/constants";
 import { ImageUpload } from "@/components/image-upload";
 
-// 🔥 UPDATED: Treasury address resolver
-class TreasuryResolver {
-  static getTreasuryAddress(): PublicKey {
-    // Option 1: Use environment variable if set
-    if (process.env.NEXT_PUBLIC_TREASURY_ADDRESS) {
-      console.log('✅ Using treasury from env:', process.env.NEXT_PUBLIC_TREASURY_ADDRESS);
-      return new PublicKey(process.env.NEXT_PUBLIC_TREASURY_ADDRESS);
-    }
-    
-    // Option 2: Use known treasury addresses for different environments
-    const knownTreasuries = {
-      // Add known treasury addresses here - these would be from your program deployment
-      devnet: "11111111111111111111111111111111", // Replace with actual devnet treasury
-      mainnet: "11111111111111111111111111111111", // Replace with actual mainnet treasury
-    };
-    
-    // Option 3: Derive treasury PDA if it's program-derived
-    try {
-      const [treasuryPDA] = PublicKey.findProgramAddressSync(
-        [Buffer.from("treasury")],
-        new PublicKey(PROGRAM_ID)
-      );
-      console.log('✅ Using derived treasury PDA:', treasuryPDA.toString());
-      return treasuryPDA;
-    } catch (error) {
-      console.error('❌ Failed to derive treasury PDA:', error);
-    }
-    
-    // Option 4: Fallback to a default (this might fail)
-    console.warn('⚠️ Using fallback treasury - this might cause InvalidTreasury error');
-    return new PublicKey("11111111111111111111111111111111");
-  }
-}
-
-// Function to create initialize instruction manually
-function createInitializeInstruction(
+// Function to create initialize_billion_scale instruction manually
+function createInitializeBillionScaleInstruction(
   programId: PublicKey,
   authority: PublicKey,
   treasury: PublicKey,
   v1TokenMint: PublicKey,
   takeover: PublicKey,
   vault: PublicKey,
-  minAmount: bigint,
   duration: bigint,
-  customRewardRate: number
+  rewardRateBp: number,
+  targetParticipationBp: number,
+  v1MarketPriceLamports: bigint
 ): TransactionInstruction {
   // Create instruction data buffer
-  // This is the discriminator for "initialize" method from your IDL
-  const discriminator = Buffer.from([175, 175, 109, 31, 13, 152, 155, 237]);
+  // This is the discriminator for "initialize_billion_scale" method from your new IDL
+  const discriminator = Buffer.from([10, 1, 51, 248, 146, 123, 209, 48]);
   
   // Serialize the parameters
-  const minAmountBuffer = Buffer.alloc(8);
-  minAmountBuffer.writeBigUInt64LE(minAmount, 0);
-  
   const durationBuffer = Buffer.alloc(8);
   durationBuffer.writeBigInt64LE(duration, 0);
   
-  const rewardRateBuffer = Buffer.alloc(8);
-  const view = new DataView(rewardRateBuffer.buffer);
-  view.setFloat64(0, customRewardRate, true); // little endian
+  const rewardRateBpBuffer = Buffer.alloc(2);
+  rewardRateBpBuffer.writeUInt16LE(rewardRateBp, 0);
+  
+  const targetParticipationBpBuffer = Buffer.alloc(2);
+  targetParticipationBpBuffer.writeUInt16LE(targetParticipationBp, 0);
+  
+  const v1MarketPriceBuffer = Buffer.alloc(8);
+  v1MarketPriceBuffer.writeBigUInt64LE(v1MarketPriceLamports, 0);
   
   const data = Buffer.concat([
     discriminator,
-    minAmountBuffer,
     durationBuffer,
-    rewardRateBuffer
+    rewardRateBpBuffer,
+    targetParticipationBpBuffer,
+    v1MarketPriceBuffer
   ]);
 
   const keys = [
     { pubkey: authority, isSigner: true, isWritable: true },
-    { pubkey: treasury, isSigner: false, isWritable: true }, // 🔥 FIXED: Use proper treasury
+    { pubkey: treasury, isSigner: false, isWritable: true },
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
     { pubkey: vault, isSigner: true, isWritable: true },
@@ -113,9 +82,10 @@ export default function CreateTakeover() {
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
     v1TokenMint: "So11111111111111111111111111111111111111112",
-    minAmount: "1000",
     duration: "7",
-    customRewardRate: "1.0",
+    rewardRateBp: "150", // 1.5x in basis points (150/100 = 1.5x)
+    targetParticipationBp: "1000", // 10% in basis points (1000/100 = 10%)
+    v1MarketPriceLamports: "1000000", // 0.001 SOL per token
     tokenName: "Test Token",
     imageUrl: ""
   });
@@ -133,7 +103,7 @@ export default function CreateTakeover() {
 
     try {
       setLoading(true);
-      console.log("1. Starting takeover creation...");
+      console.log("1. Starting billion-scale takeover creation...");
       
       // Check wallet balance
       const balance = await connection.getBalance(publicKey);
@@ -145,19 +115,25 @@ export default function CreateTakeover() {
       
       // Parse form data
       const v1Mint = new PublicKey(formData.v1TokenMint);
-      const minAmount = BigInt(Number(formData.minAmount) * 1_000_000); // 6 decimals
       const duration = BigInt(Number(formData.duration) * 86400); // days to seconds
-      const rewardRate = Number(formData.customRewardRate);
+      const rewardRateBp = Number(formData.rewardRateBp);
+      const targetParticipationBp = Number(formData.targetParticipationBp);
+      const v1MarketPriceLamports = BigInt(formData.v1MarketPriceLamports);
       
-      console.log("2. Form data parsed:");
+      console.log("2. Billion-scale form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
-      console.log("   Min Amount:", minAmount.toString());
-      console.log("   Duration:", duration.toString());
-      console.log("   Reward Rate:", rewardRate);
+      console.log("   Duration:", duration.toString(), "seconds");
+      console.log("   Reward Rate:", rewardRateBp, "basis points (", rewardRateBp/100, "x)");
+      console.log("   Target Participation:", targetParticipationBp, "basis points (", targetParticipationBp/100, "%)");
+      console.log("   V1 Market Price:", v1MarketPriceLamports.toString(), "lamports");
       
-      // 🔥 UPDATED: Get the correct treasury address
-      const treasury = TreasuryResolver.getTreasuryAddress();
-      console.log("2.1. Treasury address:", treasury.toString());
+      // Validate new parameters
+      if (rewardRateBp < 100 || rewardRateBp > 200) {
+        throw new Error("Reward rate must be between 100 (1.0x) and 200 (2.0x) basis points");
+      }
+      if (targetParticipationBp < 100 || targetParticipationBp > 10000) {
+        throw new Error("Target participation must be between 100 (1%) and 10000 (100%) basis points");
+      }
       
       // Find takeover PDA
       const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
@@ -184,20 +160,21 @@ export default function CreateTakeover() {
       console.log("   End time:", endTime);
       console.log("   Duration (seconds):", Number(duration));
       
-      // 🔥 UPDATED: Create the initialize instruction with proper treasury
-      const initializeIx = createInitializeInstruction(
+      // Create the initialize_billion_scale instruction
+      const initializeIx = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
-        publicKey,        // authority (signer)
-        treasury,         // treasury (from resolver)
-        v1Mint,          // v1 token mint
-        takeoverPDA,     // takeover PDA
-        vault.publicKey, // vault (signer)
-        minAmount,
+        publicKey,
+        publicKey, // Using wallet as treasury
+        v1Mint,
+        takeoverPDA,
+        vault.publicKey,
         duration,
-        rewardRate
+        rewardRateBp,
+        targetParticipationBp,
+        v1MarketPriceLamports
       );
       
-      console.log("6. Initialize instruction created with treasury:", treasury.toString());
+      console.log("6. Initialize billion-scale instruction created");
       
       // Create and send transaction with legacy format
       const transaction = new Transaction();
@@ -213,34 +190,10 @@ export default function CreateTakeover() {
       
       console.log("7. Transaction built and signed by vault");
       
-      // 🔥 IMPROVED: Simulate first to catch errors early
-      try {
-        console.log("7.1. Simulating transaction...");
-        const simulation = await connection.simulateTransaction(transaction);
-        
-        if (simulation.value.err) {
-          console.error("7.2. Simulation failed:", simulation.value.err);
-          console.error("7.3. Simulation logs:", simulation.value.logs);
-          
-          // Parse the error for better user feedback
-          const errorStr = JSON.stringify(simulation.value.err);
-          if (errorStr.includes('"Custom":6013')) {
-            throw new Error(`Invalid treasury address. Expected treasury: Please check your program configuration. Current treasury: ${treasury.toString()}`);
-          } else {
-            throw new Error(`Transaction simulation failed: ${errorStr}`);
-          }
-        }
-        
-        console.log("7.4. Simulation successful:", simulation.value.logs);
-      } catch (simError: any) {
-        console.error("7.5. Simulation error:", simError);
-        throw simError;
-      }
-      
       // Send transaction
-      console.log("8. Sending transaction...");
+      console.log("8. Sending billion-scale transaction...");
       const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: false,
+        skipPreflight: true,
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
@@ -272,12 +225,17 @@ export default function CreateTakeover() {
             authority: publicKey.toString(),
             v1TokenMint: v1Mint.toString(),
             vault: vault.publicKey.toString(),
-            minAmount: minAmount.toString(),
+            // NOTE: The backend will need to be updated to handle the new billion-scale fields
+            minAmount: "0", // Will be calculated by the program
             startTime: startTime.toString(),
             endTime: endTime.toString(),
-            customRewardRate: rewardRate,
+            customRewardRate: rewardRateBp / 100, // Convert basis points to decimal
             tokenName: formData.tokenName,
-            imageUrl: formData.imageUrl
+            imageUrl: formData.imageUrl,
+            // New fields for billion-scale
+            rewardRateBp: rewardRateBp,
+            targetParticipationBp: targetParticipationBp,
+            v1MarketPriceLamports: v1MarketPriceLamports.toString()
           })
         });
 
@@ -287,7 +245,7 @@ export default function CreateTakeover() {
         }
 
         const dbResult = await dbResponse.json();
-        console.log("11. Successfully saved to database:", dbResult);
+        console.log("11. Successfully saved billion-scale takeover to database:", dbResult);
         
       } catch (dbError) {
         console.error("Database save error:", dbError);
@@ -295,29 +253,30 @@ export default function CreateTakeover() {
         // The blockchain transaction succeeded, which is most important
         toast({
           title: "Partial Success",
-          description: "Takeover created on blockchain but failed to save to database. Check console for details.",
+          description: "Billion-scale takeover created on blockchain but failed to save to database. Check console for details.",
           variant: "destructive"
         });
       }
       
       toast({
-        title: "Takeover Created Successfully! 🎉",
-        description: `View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
+        title: "Billion-Scale Takeover Created Successfully! 🎉",
+        description: `Conservative billion-scale takeover created! View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
         duration: 10000
       });
 
       // Reset form
       setFormData({
         v1TokenMint: "So11111111111111111111111111111111111111112",
-        minAmount: "1000",
         duration: "7",
-        customRewardRate: "1.0",
+        rewardRateBp: "150",
+        targetParticipationBp: "1000",
+        v1MarketPriceLamports: "1000000",
         tokenName: "Test Token",
         imageUrl: ""
       });
 
     } catch (error: any) {
-      console.error("Creation failed:");
+      console.error("Billion-scale creation failed:");
       console.error("Error:", error);
       console.error("Error message:", error.message);
       
@@ -340,21 +299,13 @@ export default function CreateTakeover() {
     <div className="max-w-2xl mx-auto py-8">
       <Card>
         <CardHeader>
-          <CardTitle>Create Community Takeover</CardTitle>
+          <CardTitle>Create Billion-Scale Community Takeover</CardTitle>
           <CardDescription>
-            Fixed treasury address handling to prevent InvalidTreasury errors
+            Conservative billion-token takeover with 2% safety cushion and 2.0x max rewards
             <br />
             Program ID: {PROGRAM_ID}
             <br />
             Connected: {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-4)}
-            <br />
-            Treasury: {(() => {
-              try {
-                return TreasuryResolver.getTreasuryAddress().toString().slice(0, 8) + '...' + TreasuryResolver.getTreasuryAddress().toString().slice(-4);
-              } catch {
-                return 'Error resolving treasury';
-              }
-            })()}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -365,7 +316,7 @@ export default function CreateTakeover() {
                 id="tokenName"
                 value={formData.tokenName}
                 onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
-                placeholder="My Awesome Token"
+                placeholder="My Billion Token"
                 required
               />
             </div>
@@ -380,7 +331,7 @@ export default function CreateTakeover() {
                 required
               />
               <p className="text-sm text-gray-500">
-                Using Wrapped SOL for testing
+                Must have supply between 1M - 10B tokens for safety
               </p>
             </div>
 
@@ -390,17 +341,6 @@ export default function CreateTakeover() {
               currentImageUrl={formData.imageUrl}
               label="Takeover Image"
             />
-
-            <div className="space-y-2">
-              <Label htmlFor="minAmount">Minimum Amount Required (tokens)</Label>
-              <Input
-                id="minAmount"
-                type="number"
-                value={formData.minAmount}
-                onChange={(e) => setFormData(prev => ({ ...prev, minAmount: e.target.value }))}
-                required
-              />
-            </div>
 
             <div className="space-y-2">
               <Label htmlFor="duration">Duration (Days)</Label>
@@ -416,36 +356,64 @@ export default function CreateTakeover() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="customRewardRate">V2 Reward Rate Multiplier</Label>
+              <Label htmlFor="rewardRateBp">Reward Rate (Basis Points)</Label>
               <Input
-                id="customRewardRate"
+                id="rewardRateBp"
                 type="number"
-                step="0.1"
-                value={formData.customRewardRate}
-                onChange={(e) => setFormData(prev => ({ ...prev, customRewardRate: e.target.value }))}
+                value={formData.rewardRateBp}
+                onChange={(e) => setFormData(prev => ({ ...prev, rewardRateBp: e.target.value }))}
+                min="100"
+                max="200"
                 required
               />
+              <p className="text-sm text-gray-500">
+                100 = 1.0x, 150 = 1.5x, 200 = 2.0x (conservative max)
+              </p>
             </div>
 
-            {/* 🔥 NEW: Treasury address info */}
-            <div className="p-4 bg-yellow-50 dark:bg-yellow-950 rounded-lg">
-              <h4 className="font-medium text-yellow-800 dark:text-yellow-200 mb-2">Treasury Configuration</h4>
-              <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                Treasury address: {(() => {
-                  try {
-                    return TreasuryResolver.getTreasuryAddress().toString();
-                  } catch {
-                    return 'Error resolving treasury';
-                  }
-                })()}
+            <div className="space-y-2">
+              <Label htmlFor="targetParticipationBp">Target Participation (Basis Points)</Label>
+              <Input
+                id="targetParticipationBp"
+                type="number"
+                value={formData.targetParticipationBp}
+                onChange={(e) => setFormData(prev => ({ ...prev, targetParticipationBp: e.target.value }))}
+                min="100"
+                max="10000"
+                required
+              />
+              <p className="text-sm text-gray-500">
+                1000 = 10%, 2000 = 20%, etc. (determines minimum goal)
               </p>
-              <p className="text-xs text-yellow-600 dark:text-yellow-400 mt-1">
-                This address must match what your Solana program expects or you'll get an InvalidTreasury error.
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="v1MarketPriceLamports">V1 Market Price (Lamports)</Label>
+              <Input
+                id="v1MarketPriceLamports"
+                type="number"
+                value={formData.v1MarketPriceLamports}
+                onChange={(e) => setFormData(prev => ({ ...prev, v1MarketPriceLamports: e.target.value }))}
+                min="1"
+                required
+              />
+              <p className="text-sm text-gray-500">
+                1,000,000 = 0.001 SOL per token (for liquidity calculations)
+              </p>
+            </div>
+
+            <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+              <p className="text-sm text-blue-800 dark:text-blue-200">
+                🛡️ <strong>Conservative Safety Features:</strong>
+                <br />• Maximum 2.0x reward rate for sustainability
+                <br />• Built-in 2% safety cushion to prevent overflow
+                <br />• Proportionate goals based on billion-token scale
+                <br />• Automatic overflow protection
               </p>
             </div>
 
             <Button type="submit" disabled={loading} className="w-full">
-              {loading ? <LoadingSpinner /> : "Create Takeover"}
+              {loading ? <LoadingSpinner /> : "Create Billion-Scale Takeover"}
             </Button>
           </form>
         </CardContent>

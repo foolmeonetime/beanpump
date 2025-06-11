@@ -8,16 +8,19 @@
   },
   "instructions": [
     {
-      "name": "airdrop_v2",
+      "name": "airdrop_v2_liquidity",
+      "docs": [
+        "Airdrop function for claiming rewards or refunds"
+      ],
       "discriminator": [
-        140,
-        11,
-        185,
-        155,
-        26,
-        142,
-        21,
-        45
+        245,
+        217,
+        224,
+        30,
+        170,
+        53,
+        154,
+        197
       ],
       "accounts": [
         {
@@ -86,24 +89,22 @@
           "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
         }
       ],
-      "args": [
-        {
-          "name": "amount",
-          "type": "u64"
-        }
-      ]
+      "args": []
     },
     {
-      "name": "contribute",
+      "name": "contribute_billion_scale",
+      "docs": [
+        "Enhanced contribute function with billion-token overflow protection"
+      ],
       "discriminator": [
-        82,
-        33,
-        68,
-        131,
-        32,
-        0,
-        205,
-        95
+        14,
+        10,
+        23,
+        114,
+        130,
+        172,
+        248,
+        38
       ],
       "accounts": [
         {
@@ -173,6 +174,9 @@
     },
     {
       "name": "finalize_takeover",
+      "docs": [
+        "Finalize takeover with conservative validation"
+      ],
       "discriminator": [
         237,
         226,
@@ -217,16 +221,19 @@
       "args": []
     },
     {
-      "name": "initialize",
+      "name": "initialize_billion_scale",
+      "docs": [
+        "Initialize takeover with proportionate goals for billion-token scale"
+      ],
       "discriminator": [
-        175,
-        175,
-        109,
-        31,
-        13,
-        152,
-        155,
-        237
+        10,
+        1,
+        51,
+        248,
+        146,
+        123,
+        209,
+        48
       ],
       "accounts": [
         {
@@ -290,16 +297,20 @@
       ],
       "args": [
         {
-          "name": "min_amount",
-          "type": "u64"
-        },
-        {
           "name": "duration",
           "type": "i64"
         },
         {
-          "name": "custom_reward_rate",
-          "type": "f64"
+          "name": "reward_rate_bp",
+          "type": "u16"
+        },
+        {
+          "name": "target_participation_bp",
+          "type": "u16"
+        },
+        {
+          "name": "v1_market_price_lamports",
+          "type": "u64"
         }
       ]
     }
@@ -456,6 +467,41 @@
       "code": 6013,
       "name": "InvalidTreasury",
       "msg": "Invalid treasury address"
+    },
+    {
+      "code": 6014,
+      "name": "WouldCauseOverflow",
+      "msg": "Contribution would cause reward pool overflow"
+    },
+    {
+      "code": 6015,
+      "name": "NotLiquidityMode",
+      "msg": "Not in liquidity mode"
+    },
+    {
+      "code": 6016,
+      "name": "JupiterSwapNotCompleted",
+      "msg": "Jupiter swap not completed"
+    },
+    {
+      "code": 6017,
+      "name": "LpAlreadyCreated",
+      "msg": "Liquidity pool already created"
+    },
+    {
+      "code": 6018,
+      "name": "InvalidV1TotalSupply",
+      "msg": "Invalid V1 total supply"
+    },
+    {
+      "code": 6019,
+      "name": "NotSuccessful",
+      "msg": "Takeover is not successful"
+    },
+    {
+      "code": 6020,
+      "name": "AlreadyCompleted",
+      "msg": "Operation already completed"
     }
   ],
   "types": [
@@ -557,10 +603,6 @@
             "type": "pubkey"
           },
           {
-            "name": "min_amount",
-            "type": "u64"
-          },
-          {
             "name": "start_time",
             "type": "i64"
           },
@@ -593,7 +635,23 @@
             "type": "pubkey"
           },
           {
+            "name": "bump",
+            "type": "u8"
+          },
+          {
+            "name": "v1_total_supply",
+            "type": "u64"
+          },
+          {
             "name": "v2_total_supply",
+            "type": "u64"
+          },
+          {
+            "name": "reward_pool_tokens",
+            "type": "u64"
+          },
+          {
+            "name": "liquidity_pool_tokens",
             "type": "u64"
           },
           {
@@ -601,8 +659,36 @@
             "type": "u16"
           },
           {
-            "name": "bump",
-            "type": "u8"
+            "name": "target_participation_bp",
+            "type": "u16"
+          },
+          {
+            "name": "calculated_min_amount",
+            "type": "u64"
+          },
+          {
+            "name": "max_safe_total_contribution",
+            "type": "u64"
+          },
+          {
+            "name": "v1_market_price_lamports",
+            "type": "u64"
+          },
+          {
+            "name": "sol_for_liquidity",
+            "type": "u64"
+          },
+          {
+            "name": "jupiter_swap_completed",
+            "type": "bool"
+          },
+          {
+            "name": "lp_created",
+            "type": "bool"
+          },
+          {
+            "name": "participation_rate_bp",
+            "type": "u16"
           }
         ]
       }

@@ -1,8 +1,8 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
-import { Keypair, PublicKey, Transaction, SystemProgram, VersionedTransaction, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction, SystemProgram } from "@solana/web3.js";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { Program, BN, Wallet } from "@coral-xyz/anchor";
+import { BN } from "@coral-xyz/anchor";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { LoadingSpinner } from "./loading-spinner";
 import { useToast } from "./ui/use-toast";
@@ -13,55 +13,10 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { getProgram, findContributorPDA } from "@/lib/program";
+import { BillionScaleProgramInteractions, BillionScaleTakeover, ContributorData } from "@/lib/program-interactions";
+import { findContributorPDA } from "@/lib/program";
 
-// 🔥 UPDATED: Reward rate utility functions
-class RewardRateUtils {
-  // Convert decimal to basis points (1.5 -> 150)
-  static toBasisPoints(decimal: number): number {
-    return Math.round(decimal * 100);
-  }
-  
-  // Convert basis points to decimal (150 -> 1.5)
-  static toDecimal(basisPoints: number): number {
-    return basisPoints / 100.0;
-  }
-  
-  // Validate reward rate
-  static isValid(decimal: number): boolean {
-    return decimal >= 0.5 && decimal <= 10.0;
-  }
-  
-  // Safe parsing that handles corrupted f64 values
-  static parseRewardRate(rawData: any): number {
-    // Handle new format (basis points)
-    if (rawData.rewardRateBp !== undefined && typeof rawData.rewardRateBp === 'number') {
-      const decimal = this.toDecimal(rawData.rewardRateBp);
-      console.log(`✅ Using new basis points format: ${rawData.rewardRateBp}bp = ${decimal}x`);
-      return decimal;
-    }
-    
-    // Handle old format (f64) - might be corrupted
-    if (rawData.customRewardRate !== undefined) {
-      if (typeof rawData.customRewardRate === 'number' && 
-          isFinite(rawData.customRewardRate) && 
-          this.isValid(rawData.customRewardRate)) {
-        console.log(`✅ Using old f64 format: ${rawData.customRewardRate}x`);
-        return rawData.customRewardRate;
-      } else {
-        console.warn('🚨 Corrupted f64 reward rate detected:', rawData.customRewardRate);
-        console.log('🔧 Using fallback rate: 1.5x');
-        return 1.5; // Safe fallback
-      }
-    }
-    
-    // No reward rate field found
-    console.log('🔧 No reward rate found, using default: 1.5x');
-    return 1.5;
-  }
-}
-
-// Manual ATA implementation for older spl-token version
+// Helper function for ATA operations (keeping for compatibility)
 const getAssociatedTokenAddress = async (
   mint: PublicKey,
   owner: PublicKey
@@ -72,68 +27,16 @@ const getAssociatedTokenAddress = async (
       TOKEN_PROGRAM_ID.toBuffer(),
       mint.toBuffer(),
     ],
-    TOKEN_PROGRAM_ID
+    new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
   ))[0];
 };
 
-const createATAInstruction = (
-  payer: PublicKey,
-  ata: PublicKey,
-  mint: PublicKey,
-  owner: PublicKey
-) => {
-  return SystemProgram.createAccount({
-    fromPubkey: payer,
-    newAccountPubkey: ata,
-    space: 165,
-    lamports: 2039280, // Hardcoded minimum balance
-    programId: TOKEN_PROGRAM_ID,
-  });
-};
-
-// Wallet adapter type fix
-interface AdaptedWallet extends Wallet {
-  signTransaction: <T extends Transaction | VersionedTransaction>(tx: T) => Promise<T>;
-  signAllTransactions: <T extends Transaction | VersionedTransaction>(txs: T[]) => Promise<T[]>;
-}
-
-const adaptWallet = (wallet: any): AdaptedWallet => ({
-  publicKey: wallet.publicKey,
-  signTransaction: wallet.signTransaction,
-  signAllTransactions: wallet.signAllTransactions,
-  payer: Keypair.generate() // Dummy payer for type safety
-});
-
-// 🔥 UPDATED: Interface that handles both old and new reward rate formats
-interface TakeoverAccount {
+interface BillionScaleTakeoverAccount {
   publicKey: PublicKey;
-  account: {
-    authority: PublicKey;
-    v1TokenMint: PublicKey;
-    vault: PublicKey;
-    minAmount: BN;
-    startTime: BN;
-    endTime: BN;
-    totalContributed: BN;
-    contributorCount: BN;
-    isFinalized: boolean;
-    isSuccessful: boolean;
-    hasV2Mint: boolean;
-    v2TokenMint: PublicKey;
-    v2TotalSupply: BN;
-    // Handle both formats for backward compatibility
-    rewardRateBp?: number;        // New format (u16 basis points)
-    customRewardRate?: number;    // Old format (f64) - might be corrupted
-    bump: number;
-  };
+  account: BillionScaleTakeover;
 }
 
-interface ContributorData {
-  contribution: BN;
-  claimed: boolean;
-}
-
-export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
+export function BillionScaleTakeoverDashboard({ takeover }: { takeover: BillionScaleTakeoverAccount }) {
   const { connection } = useConnection();
   const wallet = useWallet();
   const { publicKey, sendTransaction } = wallet;
@@ -145,17 +48,33 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
   const [timeLeft, setTimeLeft] = useState("");
   const [contributorData, setContributorData] = useState<ContributorData | null>(null);
   const [v2TokenBalance, setV2TokenBalance] = useState(0);
+  const [programInteractions, setProgramInteractions] = useState<BillionScaleProgramInteractions | null>(null);
+  
   const v1Decimals = 6;
   const v2Decimals = 6;
 
-  // 🔥 UPDATED: Parse reward rate safely
-  const customRewardRate = RewardRateUtils.parseRewardRate(takeover.account);
+  // Initialize program interactions
+  useEffect(() => {
+    if (wallet.publicKey) {
+      const interactions = new BillionScaleProgramInteractions(connection, wallet);
+      setProgramInteractions(interactions);
+    }
+  }, [connection, wallet]);
 
-  const minAmount = takeover.account.minAmount.toNumber() / 10 ** v1Decimals;
+  // Calculate billion-scale metrics
+  const calculatedMinAmount = takeover.account.calculatedMinAmount.toNumber() / 10 ** v1Decimals;
   const totalContributed = takeover.account.totalContributed.toNumber() / 10 ** v1Decimals;
+  const maxSafeContribution = takeover.account.maxSafeTotalContribution.toNumber() / 10 ** v1Decimals;
   const endTime = takeover.account.endTime.toNumber();
   const isActive = Date.now() / 1000 < endTime && !takeover.account.isFinalized;
-  const progressPercentage = minAmount === 0 ? 0 : (totalContributed / minAmount) * 100;
+  const progressPercentage = calculatedMinAmount === 0 ? 0 : (totalContributed / calculatedMinAmount) * 100;
+  
+  // Billion-scale specific metrics
+  const v1SupplyBillions = takeover.account.v1TotalSupply.toNumber() / (10 ** (v1Decimals + 9)); // Convert to billions
+  const participationRate = takeover.account.participationRateBp / 100; // Convert to percentage
+  const rewardRate = takeover.account.rewardRateBp / 100; // Convert to multiplier
+  const safetyUtilization = maxSafeContribution === 0 ? 0 : (totalContributed / maxSafeContribution) * 100;
+  const remainingSafe = maxSafeContribution - totalContributed;
 
   const updateTimeLeft = useCallback(() => {
     const now = Math.floor(Date.now() / 1000);
@@ -179,13 +98,13 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
   }, [updateTimeLeft]);
 
   const fetchUserData = useCallback(async () => {
-    if (!publicKey) return;
+    if (!publicKey || !programInteractions) return;
 
     try {
-      const program = getProgram(connection, adaptWallet(wallet));
       const [contributorPDA] = await findContributorPDA(takeover.publicKey, publicKey);
 
       try {
+        const program = programInteractions.getProgram();
         const contributor = await program.account.contributorData.fetch(contributorPDA) as unknown as ContributorData;
         setContributorData(contributor);
         setUserContribution(contributor.contribution.toNumber() / 10 ** v1Decimals);
@@ -198,74 +117,76 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
         takeover.account.v1TokenMint,
         publicKey
       );
-      const balance = await connection.getTokenAccountBalance(v1TokenAccount);
-      setUserTokenBalance(Number(balance.value.amount) / 10 ** v1Decimals);
+      
+      try {
+        const balance = await connection.getTokenAccountBalance(v1TokenAccount);
+        setUserTokenBalance(Number(balance.value.amount) / 10 ** v1Decimals);
+      } catch {
+        setUserTokenBalance(0);
+      }
 
-      if (takeover.account.hasV2Mint) {
-        const v2TokenAccount = await getAssociatedTokenAddress(
-          takeover.account.v2TokenMint,
-          publicKey
-        );
-        const v2Balance = await connection.getTokenAccountBalance(v2TokenAccount);
-        setV2TokenBalance(Number(v2Balance.value.amount) / 10 ** v2Decimals);
+      if (takeover.account.hasV2Mint && takeover.account.v2TokenMint) {
+        try {
+          const v2TokenAccount = await getAssociatedTokenAddress(
+            takeover.account.v2TokenMint,
+            publicKey
+          );
+          const v2Balance = await connection.getTokenAccountBalance(v2TokenAccount);
+          setV2TokenBalance(Number(v2Balance.value.amount) / 10 ** v2Decimals);
+        } catch {
+          setV2TokenBalance(0);
+        }
       }
     } catch (error) {
       console.error("Error fetching user data:", error);
     }
-  }, [publicKey, connection, takeover, v1Decimals, v2Decimals, wallet]);
+  }, [publicKey, connection, takeover, v1Decimals, v2Decimals, programInteractions]);
 
   useEffect(() => {
     fetchUserData();
   }, [fetchUserData]);
 
   const handleContribute = async () => {
-    if (!publicKey || !contributionAmount || !wallet.signTransaction) return;
+    if (!publicKey || !contributionAmount || !programInteractions) return;
 
     try {
       setLoading(true);
-      const program = getProgram(connection, adaptWallet(wallet));
       const amount = Number(contributionAmount);
-      const amountLamports = new BN(amount * 10 ** v1Decimals);
+      const amountBN = new BN(amount * 10 ** v1Decimals);
 
-      const [contributorPDA] = await findContributorPDA(takeover.publicKey, publicKey);
+      // Check for overflow before attempting contribution
+      const wouldOverflow = await programInteractions.wouldCauseOverflow(takeover.publicKey, amountBN);
+      if (wouldOverflow) {
+        throw new Error(`Contribution would exceed safe capacity. Maximum safe remaining: ${remainingSafe.toFixed(2)} tokens`);
+      }
+
       const userTokenAccount = await getAssociatedTokenAddress(
         takeover.account.v1TokenMint,
         publicKey
       );
 
-      let tx = new Transaction();
+      const contributeIx = await programInteractions.contributeBillionScale(
+        publicKey,
+        takeover.publicKey,
+        userTokenAccount,
+        takeover.account.vault,
+        amountBN
+      );
+
+      const tx = new Transaction();
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
-      
-      try {
-        await connection.getAccountInfo(userTokenAccount);
-      } catch {
-        tx.add(createATAInstruction(
-          publicKey,
-          userTokenAccount,
-          takeover.account.v1TokenMint,
-          publicKey
-        ));
-      }
+      tx.add(contributeIx);
 
-      const ix = await program.methods.contribute(amountLamports)
-        .accounts({
-          contributor: publicKey,
-          takeover: takeover.publicKey,
-          contributorAta: userTokenAccount,
-          vault: takeover.account.vault,
-          contributorAccount: contributorPDA,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .instruction();
-
-      tx.add(ix);
       const signature = await sendTransaction(tx, connection);
       await connection.confirmTransaction(signature);
 
-      toast({ title: "Contribution Successful", description: `${amount} V1 tokens contributed!` });
+      toast({ 
+        title: "Billion-Scale Contribution Successful! 🎉", 
+        description: `${amount} V1 tokens contributed safely. Reward rate: ${rewardRate}x` 
+      });
+      
       setContributionAmount("");
       await fetchUserData();
     } catch (error: any) {
@@ -280,35 +201,37 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
   };
 
   const handleFinalize = async () => {
-    if (!publicKey || !wallet.signTransaction) return;
+    if (!publicKey || !programInteractions) return;
 
     try {
       setLoading(true);
-      const program = getProgram(connection, adaptWallet(wallet));
       
-      const [v2MintPDA] = await PublicKey.findProgramAddress(
-        [Buffer.from("v2_mint"), takeover.publicKey.toBuffer()],
-        program.programId
+      // Create V2 mint keypair
+      const v2MintKeypair = Keypair.generate();
+      
+      const finalizeIx = await programInteractions.finalizeTakeover(
+        takeover.publicKey,
+        publicKey,
+        v2MintKeypair.publicKey
       );
 
-      const signature = await program.methods
-        .finalizeTakeover()
-        .accounts({
-          takeover: takeover.publicKey,
-          authority: publicKey,
-          v2Mint: v2MintPDA,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-          rent: SYSVAR_RENT_PUBKEY, // 🔥 FIXED: Use imported constant
-        })
-        .rpc();
+      const tx = new Transaction();
+      const { blockhash } = await connection.getLatestBlockhash();
+      tx.recentBlockhash = blockhash;
+      tx.feePayer = publicKey;
+      tx.add(finalizeIx);
+      
+      // Sign with V2 mint keypair
+      tx.partialSign(v2MintKeypair);
 
+      const signature = await sendTransaction(tx, connection);
       await connection.confirmTransaction(signature);
 
       toast({
-        title: "Takeover Finalized",
-        description: `V2 Mint: ${v2MintPDA.toString()}`
+        title: "Billion-Scale Takeover Finalized! 🚀",
+        description: `Conservative safety features ensured smooth completion. V2 Mint: ${v2MintKeypair.publicKey.toString().slice(0, 8)}...`
       });
+      
       await fetchUserData();
     } catch (error: any) {
       toast({
@@ -322,61 +245,40 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
   };
 
   const handleClaim = async () => {
-    if (!publicKey || !contributorData || !wallet.signTransaction) return;
+    if (!publicKey || !contributorData || !programInteractions) return;
 
     try {
       setLoading(true);
-      const program = getProgram(connection, adaptWallet(wallet));
-      const [contributorPDA] = await findContributorPDA(takeover.publicKey, publicKey);
       
       const isSuccess = takeover.account.isSuccessful;
       const mint = isSuccess ? takeover.account.v2TokenMint : takeover.account.v1TokenMint;
-      const decimals = isSuccess ? v2Decimals : v1Decimals;
       
-      // 🔥 UPDATED: Calculate reward amount using safe reward rate
-      const baseAmount = contributorData.contribution.toNumber();
-      const rewardAmount = isSuccess 
-        ? new BN(baseAmount * customRewardRate)
-        : new BN(baseAmount);
-
       const userTokenAccount = await getAssociatedTokenAddress(mint, publicKey);
-      let tx = new Transaction();
+
+      const claimIx = await programInteractions.airdropV2Liquidity(
+        takeover.account.authority,
+        publicKey,
+        takeover.publicKey,
+        mint,
+        userTokenAccount,
+        takeover.account.vault
+      );
+
+      const tx = new Transaction();
       const { blockhash } = await connection.getLatestBlockhash();
       tx.recentBlockhash = blockhash;
       tx.feePayer = publicKey;
+      tx.add(claimIx);
 
-      try {
-        await connection.getAccountInfo(userTokenAccount);
-      } catch {
-        tx.add(createATAInstruction(
-          publicKey,
-          userTokenAccount,
-          mint,
-          publicKey
-        ));
-      }
-
-      const ix = await program.methods.airdropV2(rewardAmount)
-        .accounts({
-          authority: takeover.account.authority,
-          contributor: publicKey,
-          takeover: takeover.publicKey,
-          contributorAccount: contributorPDA,
-          v2Mint: mint,
-          contributorAta: userTokenAccount,
-          vault: takeover.account.vault,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .instruction();
-
-      tx.add(ix);
       const signature = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(signature, "confirmed");
+      await connection.confirmTransaction(signature);
 
+      const expectedReward = userContribution * rewardRate;
       toast({
-        title: "Claim Successful",
-        description: `You've received ${rewardAmount.toNumber() / 10 ** decimals} ${isSuccess ? 'V2' : 'V1'} tokens`
+        title: "Billion-Scale Claim Successful! 🎁",
+        description: `You've received ${isSuccess ? expectedReward.toFixed(2) : userContribution} ${isSuccess ? 'V2' : 'V1'} tokens`
       });
+      
       await fetchUserData();
     } catch (error: any) {
       toast({
@@ -389,14 +291,14 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
     }
   };
 
-  const formatAmount = (amount: number, decimals: number) => 
+  const formatAmount = (amount: number, decimals: number = 2) => 
     amount.toLocaleString(undefined, { maximumFractionDigits: decimals });
 
   return (
-    <div className="w-full max-w-4xl mx-auto">
+    <div className="w-full max-w-5xl mx-auto">
       <Tabs defaultValue="overview">
         <TabsList className="grid w-full grid-cols-3">
-          <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="overview">Billion-Scale Overview</TabsTrigger>
           <TabsTrigger value="contribute" disabled={!isActive}>
             Contribute
           </TabsTrigger>
@@ -406,99 +308,190 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
         </TabsList>
 
         <TabsContent value="overview">
-          <Card>
-            <CardHeader>
-              <CardTitle>Takeover Overview</CardTitle>
-              <CardDescription>
-                {takeover.account.isFinalized
-                  ? takeover.account.isSuccessful
-                    ? "Successfully completed!"
-                    : "Did not meet target"
-                  : "Active campaign"}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              {/* Progress Section */}
-              <div className="space-y-2">
-                <div className="flex justify-between">
-                  <span>Progress</span>
-                  <span>
-                    {formatAmount(totalContributed, v1Decimals)} / {formatAmount(minAmount, v1Decimals)} V1
+          <div className="space-y-6">
+            {/* Main Overview Card */}
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex justify-between items-center">
+                  <span>Billion-Scale Takeover Overview</span>
+                  <span className={`text-sm px-3 py-1 rounded-full ${
+                    takeover.account.isFinalized
+                      ? takeover.account.isSuccessful
+                        ? "bg-green-100 text-green-800"
+                        : "bg-red-100 text-red-800"
+                      : isActive 
+                        ? "bg-green-100 text-green-800"
+                        : "bg-yellow-100 text-yellow-800"
+                  }`}>
+                    {takeover.account.isFinalized
+                      ? takeover.account.isSuccessful
+                        ? "🎉 Successfully completed!"
+                        : "❌ Did not meet target"
+                      : isActive
+                        ? "🟢 Active campaign"
+                        : "⏰ Ended - Awaiting finalization"}
                   </span>
-                </div>
-                <Progress value={progressPercentage} />
-                <div className="flex justify-between text-sm text-muted-foreground">
-                  <span>{progressPercentage.toFixed(1)}% Complete</span>
-                  <span>Goal: {formatAmount(minAmount, v1Decimals)} V1</span>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="p-4 bg-muted rounded-lg">
-                  <div className="text-sm text-muted-foreground">Time Remaining</div>
-                  <div className="text-xl font-semibold">{timeLeft}</div>
-                </div>
-                <div className="p-4 bg-muted rounded-lg">
-                  <div className="text-sm text-muted-foreground">Contributors</div>
-                  <div className="text-xl font-semibold">
-                    {takeover.account.contributorCount.toNumber()}
+                </CardTitle>
+                <CardDescription>
+                  Conservative billion-scale takeover with 2% safety cushion and 2.0x max reward rate
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                {/* Progress Section */}
+                <div className="space-y-4">
+                  <div className="flex justify-between">
+                    <span className="font-medium">Funding Progress</span>
+                    <span>
+                      {formatAmount(totalContributed)} / {formatAmount(calculatedMinAmount)} V1
+                    </span>
+                  </div>
+                  <Progress value={progressPercentage} className="h-3" />
+                  <div className="flex justify-between text-sm text-muted-foreground">
+                    <span>{progressPercentage.toFixed(1)}% Complete</span>
+                    <span>Conservative Goal: {formatAmount(calculatedMinAmount)} V1</span>
                   </div>
                 </div>
-              </div>
 
-              {/* 🔥 UPDATED: Display reward rate with corruption detection */}
-              <div className="p-4 bg-muted rounded-lg">
-                <div className="text-sm text-muted-foreground">Reward Rate</div>
-                <div className="text-xl font-semibold">
-                  {customRewardRate}x
-                  {takeover.account.customRewardRate && 
-                   takeover.account.customRewardRate !== customRewardRate && (
-                    <span className="text-sm text-yellow-600 ml-2">
-                      (fixed from corrupted value)
-                    </span>
-                  )}
+                {/* Billion-Scale Metrics */}
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg text-center">
+                    <div className="text-xs text-blue-600 dark:text-blue-400 mb-1">V1 Supply</div>
+                    <div className="text-lg font-bold text-blue-800 dark:text-blue-200">
+                      {v1SupplyBillions.toFixed(1)}B
+                    </div>
+                  </div>
+                  <div className="p-4 bg-purple-50 dark:bg-purple-950 rounded-lg text-center">
+                    <div className="text-xs text-purple-600 dark:text-purple-400 mb-1">Participation</div>
+                    <div className="text-lg font-bold text-purple-800 dark:text-purple-200">
+                      {participationRate.toFixed(2)}%
+                    </div>
+                  </div>
+                  <div className="p-4 bg-green-50 dark:bg-green-950 rounded-lg text-center">
+                    <div className="text-xs text-green-600 dark:text-green-400 mb-1">Reward Rate</div>
+                    <div className="text-lg font-bold text-green-800 dark:text-green-200">
+                      {(rewardRate / 100).toFixed(1)}x
+                    </div>
+                  </div>
+                  <div className="p-4 bg-yellow-50 dark:bg-yellow-950 rounded-lg text-center">
+                    <div className="text-xs text-yellow-600 dark:text-yellow-400 mb-1">Safe Capacity</div>
+                    <div className="text-lg font-bold text-yellow-800 dark:text-yellow-200">
+                      {safetyUtilization.toFixed(1)}%
+                    </div>
+                  </div>
                 </div>
-                {takeover.account.rewardRateBp && (
-                  <div className="text-xs text-green-600">
-                    Stored as: {takeover.account.rewardRateBp} basis points
+
+                {/* Conservative Safety Info */}
+                <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                  <h3 className="font-medium mb-2">🛡️ Conservative Safety Features</h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-500">Max Safe Total:</span><br />
+                      <span className="font-medium">{formatAmount(maxSafeContribution)} V1</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Remaining Safe Space:</span><br />
+                      <span className="font-medium">{formatAmount(remainingSafe)} V1</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Safety Cushion:</span><br />
+                      <span className="font-medium">2% built-in overflow protection</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Max Reward Rate:</span><br />
+                      <span className="font-medium">2.0x (conservative limit)</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Time and Contributors */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-muted rounded-lg text-center">
+                    <div className="text-sm text-muted-foreground">Time Remaining</div>
+                    <div className="text-xl font-semibold">{timeLeft}</div>
+                  </div>
+                  <div className="p-4 bg-muted rounded-lg text-center">
+                    <div className="text-sm text-muted-foreground">Contributors</div>
+                    <div className="text-xl font-semibold">
+                      {takeover.account.contributorCount.toNumber()}
+                    </div>
+                  </div>
+                </div>
+
+                {publicKey && (
+                  <div className="p-4 bg-muted rounded-lg">
+                    <div className="text-sm text-muted-foreground">Your Contribution</div>
+                    <div className="text-xl font-semibold">
+                      {formatAmount(userContribution)} V1
+                    </div>
+                    {userContribution > 0 && (
+                      <div className="text-sm text-green-600 mt-1">
+                        Expected V2 reward: {formatAmount(userContribution * (rewardRate / 100))} V2
+                      </div>
+                    )}
                   </div>
                 )}
-              </div>
-
-              {publicKey && (
-                <div className="p-4 bg-muted rounded-lg">
-                  <div className="text-sm text-muted-foreground">Your Contribution</div>
-                  <div className="text-xl font-semibold">
-                    {formatAmount(userContribution, v1Decimals)} V1
-                  </div>
-                  {userContribution > 0 && takeover.account.isSuccessful && (
-                    <div className="text-sm text-green-600">
-                      Expected V2 reward: {formatAmount(userContribution * customRewardRate, v2Decimals)} V2
-                    </div>
-                  )}
-                </div>
+              </CardContent>
+              {publicKey?.equals(takeover.account.authority) && !takeover.account.isFinalized && (
+                <CardFooter>
+                  <Button 
+                    onClick={handleFinalize} 
+                    disabled={loading || Date.now() / 1000 < endTime}
+                    className="w-full"
+                  >
+                    {loading ? <LoadingSpinner /> : "Finalize Billion-Scale Takeover"}
+                  </Button>
+                </CardFooter>
               )}
-            </CardContent>
-            {publicKey?.equals(takeover.account.authority) && !takeover.account.isFinalized && (
-              <CardFooter>
-                <Button 
-                  onClick={handleFinalize} 
-                  disabled={loading || Date.now() / 1000 < endTime}
-                  className="w-full"
-                >
-                  {loading ? <LoadingSpinner /> : "Finalize Takeover"}
-                </Button>
-              </CardFooter>
+            </Card>
+
+            {/* Liquidity Features (if applicable) */}
+            {takeover.account.isFinalized && takeover.account.isSuccessful && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>🌊 Liquidity Features</CardTitle>
+                  <CardDescription>
+                    Enhanced liquidity features for billion-scale token economy
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-500">Jupiter Swap:</span><br />
+                      <span className={takeover.account.jupiterSwapCompleted ? "text-green-600" : "text-gray-400"}>
+                        {takeover.account.jupiterSwapCompleted ? "✅ Completed" : "⏳ Pending"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Liquidity Pool:</span><br />
+                      <span className={takeover.account.lpCreated ? "text-green-600" : "text-gray-400"}>
+                        {takeover.account.lpCreated ? "✅ Created" : "⏳ Pending"}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">SOL for Liquidity:</span><br />
+                      <span className="font-medium">
+                        {(takeover.account.solForLiquidity.toNumber() / 1e9).toFixed(4)} SOL
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">V1 Market Price:</span><br />
+                      <span className="font-medium">
+                        {(takeover.account.v1MarketPriceLamports.toNumber() / 1e9).toFixed(6)} SOL
+                      </span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
             )}
-          </Card>
+          </div>
         </TabsContent>
 
         <TabsContent value="contribute">
           <Card>
             <CardHeader>
-              <CardTitle>Contribute V1 Tokens</CardTitle>
+              <CardTitle>Contribute to Billion-Scale Takeover</CardTitle>
               <CardDescription>
-                Contribute to the community takeover campaign
+                Conservative contribution with overflow protection and 2% safety cushion
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -510,7 +503,7 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
               ) : (
                 <>
                   <div className="space-y-2">
-                    <Label>Amount to Contribute</Label>
+                    <Label>Amount to Contribute (V1 tokens)</Label>
                     <Input
                       type="number"
                       value={contributionAmount}
@@ -518,29 +511,30 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
                       placeholder="Enter V1 amount"
                       disabled={loading}
                     />
-                    <div className="text-sm text-muted-foreground">
-                      Available: {formatAmount(userTokenBalance, v1Decimals)} V1
+                    <div className="text-sm text-muted-foreground space-y-1">
+                      <div>Available: {formatAmount(userTokenBalance)} V1</div>
+                      <div>Safe remaining space: {formatAmount(remainingSafe)} V1</div>
+                      <div>Your reward rate: {(rewardRate / 100).toFixed(1)}x (conservative)</div>
                     </div>
-                    {/* 🔥 UPDATED: Show reward calculation */}
-                    {Number(contributionAmount) > 0 && (
-                      <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
-                        <p className="text-sm text-blue-800 dark:text-blue-200">
-                          💡 <strong>If successful:</strong> You'll receive{' '}
-                          {formatAmount(Number(contributionAmount) * customRewardRate, v2Decimals)} V2 tokens
-                          ({customRewardRate}x reward rate)
-                        </p>
-                        <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
-                          If unsuccessful: You'll get your {contributionAmount} V1 tokens refunded
-                        </p>
-                      </div>
-                    )}
                   </div>
+
+                  {Number(contributionAmount) > 0 && (
+                    <div className="p-3 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                      <p className="text-sm text-blue-800 dark:text-blue-200">
+                        💎 <strong>Expected V2 reward:</strong> {formatAmount(Number(contributionAmount) * (rewardRate / 100))} V2 tokens
+                      </p>
+                      <p className="text-xs text-blue-600 dark:text-blue-300 mt-1">
+                        🛡️ Protected by conservative 2% safety cushion and 2.0x max rate limit
+                      </p>
+                    </div>
+                  )}
+
                   <Button 
                     onClick={handleContribute}
-                    disabled={loading || !contributionAmount || userTokenBalance < Number(contributionAmount)}
+                    disabled={loading || !contributionAmount || Number(contributionAmount) > remainingSafe}
                     className="w-full"
                   >
-                    {loading ? <LoadingSpinner /> : "Contribute"}
+                    {loading ? <LoadingSpinner /> : `Contribute ${contributionAmount || '0'} V1 (Safe)`}
                   </Button>
                 </>
               )}
@@ -551,10 +545,10 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
         <TabsContent value="claim">
           <Card>
             <CardHeader>
-              <CardTitle>Claim Tokens</CardTitle>
+              <CardTitle>Claim Your Billion-Scale Rewards</CardTitle>
               <CardDescription>
                 {takeover.account.isSuccessful
-                  ? `Claim your V2 tokens (${customRewardRate}x reward)`
+                  ? "Claim your conservative V2 token allocation"
                   : "Claim your V1 refund"}
               </CardDescription>
             </CardHeader>
@@ -564,7 +558,7 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
                   <div className="p-4 bg-muted rounded-lg">
                     <div className="text-sm text-muted-foreground">Your Contribution</div>
                     <div className="text-xl font-semibold">
-                      {formatAmount(userContribution, v1Decimals)} V1
+                      {formatAmount(userContribution)} V1
                     </div>
                   </div>
                   <div className="p-4 bg-muted rounded-lg">
@@ -572,12 +566,16 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
                     <div className="text-xl font-semibold">
                       {formatAmount(
                         takeover.account.isSuccessful 
-                          ? userContribution * customRewardRate
-                          : userContribution,
-                        takeover.account.isSuccessful ? v2Decimals : v1Decimals
+                          ? userContribution * (rewardRate / 100)
+                          : userContribution
                       )}{" "}
                       {takeover.account.isSuccessful ? "V2" : "V1"}
                     </div>
+                    {takeover.account.isSuccessful && (
+                      <div className="text-xs text-green-600 mt-1">
+                        Conservative {(rewardRate / 100).toFixed(1)}x reward rate with safety guarantees
+                      </div>
+                    )}
                   </div>
                   <Button
                     onClick={handleClaim}
@@ -588,7 +586,7 @@ export function TakeoverDashboard({ takeover }: { takeover: TakeoverAccount }) {
                       ? "Already Claimed" 
                       : loading 
                         ? <LoadingSpinner /> 
-                        : "Claim Tokens"}
+                        : "Claim Billion-Scale Rewards"}
                   </Button>
                 </div>
               ) : (

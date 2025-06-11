@@ -1,4 +1,4 @@
-// components/header.tsx - Updated with claims navigation
+// components/header.tsx - Fixed navigation structure
 "use client";
 import { useState, useEffect } from "react";
 import { MoonIcon, SunIcon } from "lucide-react";
@@ -69,6 +69,9 @@ export function Header() {
             <Link href="/mint" className="text-sm hover:text-purple-600 transition-colors">
               Mint Tokens
             </Link>
+            <Link href="/pools" className="text-sm hover:text-purple-600 transition-colors">
+              Pool Simulator
+            </Link>
             {publicKey && (
               <Link href="/claims" className="relative text-sm hover:text-purple-600 transition-colors">
                 Claims
@@ -92,6 +95,7 @@ export function Header() {
               <option value="/">Home</option>
               <option value="/create">Create</option>
               <option value="/mint">Mint Tokens</option>
+              <option value="/pools">Pool Simulator</option>
               {publicKey && (
                 <option value="/claims">
                   Claims {claimCount > 0 ? `(${claimCount})` : ''}
@@ -129,6 +133,9 @@ export function Header() {
             </Link>
             <Link href="/mint" className="hover:text-purple-600 transition-colors">
               Mint
+            </Link>
+            <Link href="/pools" className="hover:text-purple-600 transition-colors">
+              Pools
             </Link>
             <Link href="/claims" className="relative hover:text-purple-600 transition-colors">
               Claims

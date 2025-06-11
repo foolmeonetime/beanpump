@@ -1,4 +1,4 @@
-// components/user-claims.tsx - Compatible version without Badge component
+// components/user-claims.tsx
 "use client";
 
 import { useEffect, useState } from "react";
@@ -46,7 +46,7 @@ export function UserClaims() {
       
       console.log('🔍 Fetching claims for:', publicKey.toString());
       
-      // Fetch claims from the new API
+      // Fetch claims from the API
       const response = await fetch(`/api/claims?contributor=${publicKey.toString()}`, {
         cache: 'no-store'
       });

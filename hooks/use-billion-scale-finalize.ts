@@ -1,51 +1,50 @@
+// hooks/use-billion-scale-finalize.ts
 "use client";
 
-import { useState } from "react";
-import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { Button } from "@/components/ui/button";
-import { LoadingSpinner } from "@/components/loading-spinner";
-import { useToast } from "@/components/ui/use-toast";
+import { useState, useCallback } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { 
   PublicKey, 
   Transaction, 
   Keypair,
   SystemProgram,
   TransactionInstruction
-} from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+} from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { useToast } from '@/components/ui/use-toast';
 
-interface FinalizeButtonProps {
-  takeoverAddress: string;
-  takeoverAuthority: string;
+interface FinalizableBillionScaleTakeover {
+  id: number;
+  address: string;
+  authority: string;
   tokenName: string;
+  totalContributed: string;
+  calculatedMinAmount?: string;
+  minAmount: string;
+  maxSafeTotalContribution: string;
+  endTime: string;
+  contributorCount: number;
+  rewardRateBp?: number;
+  customRewardRate: number;
+  targetParticipationBp: number;
+  participationRateBp: number;
+  readyToFinalize: boolean;
   isGoalMet: boolean;
-  isReadyToFinalize: boolean;
-  onFinalized?: () => void;
+  expectedOutcome: 'success' | 'failed' | 'active';
+  progressPercentage: number;
+  safetyUtilization?: number;
+  v1SupplyBillions?: number;
 }
 
 // Constants for mint creation
 const MINT_SIZE = 82;
 
-export function FinalizeButton({ 
-  takeoverAddress, 
-  takeoverAuthority, 
-  tokenName, 
-  isGoalMet, 
-  isReadyToFinalize,
-  onFinalized 
-}: FinalizeButtonProps) {
+export function useBillionScaleFinalize() {
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
-  const [finalizing, setFinalizing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [finalizing, setFinalizing] = useState<string | null>(null);
   const { toast } = useToast();
-
-  // Check if current user is the authority for this takeover
-  const isAuthority = publicKey?.toString() === takeoverAuthority;
-
-  // Don't show button if not ready to finalize or user is not the authority
-  if (!isReadyToFinalize || !isAuthority) {
-    return null;
-  }
 
   const createV2TokenMint = async (mintKeypair: Keypair, authority: PublicKey) => {
     const rentExemptBalance = await connection.getMinimumBalanceForRentExemption(MINT_SIZE);
@@ -78,8 +77,7 @@ export function FinalizeButton({
   };
 
   const createFinalizeInstruction = (takeover: PublicKey, authority: PublicKey, v2Mint: PublicKey) => {
-    const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
-    // Updated discriminator for finalize_takeover from new IDL
+    const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || "CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ");
     const discriminator = Buffer.from([237, 226, 215, 181, 203, 65, 244, 223]);
     
     return new TransactionInstruction({
@@ -96,48 +94,73 @@ export function FinalizeButton({
     });
   };
 
-  const handleFinalize = async () => {
-    console.log("🔍 BILLION-SCALE FINALIZE DEBUG:");
-    console.log("Environment PROGRAM_ID:", process.env.NEXT_PUBLIC_PROGRAM_ID);
-    console.log("RPC URL:", process.env.NEXT_PUBLIC_SOLANA_RPC_URL);
-    console.log("Takeover address:", takeoverAddress);
-    console.log("Is goal met:", isGoalMet);
-    console.log("Conservative billion-scale finalization");
-    
-    if (!process.env.NEXT_PUBLIC_PROGRAM_ID) {
-      console.error("❌ NEXT_PUBLIC_PROGRAM_ID is undefined!");
+  const fetchFinalizableTakeovers = useCallback(async (): Promise<FinalizableBillionScaleTakeover[]> => {
+    if (!publicKey) return [];
+
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`/api/finalize?authority=${publicKey.toString()}`);
+      
+      if (!response.ok) {
+        throw new Error('Failed to fetch finalizable takeovers');
+      }
+      
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.error);
+      }
+      
+      return data.takeovers || [];
+      
+    } catch (error: any) {
+      console.error('Error fetching finalizable takeovers:', error);
       toast({
-        title: "Configuration Error", 
-        description: "Program ID not found in environment variables",
+        title: "Error Loading Takeovers",
+        description: error.message,
         variant: "destructive"
       });
-      return;
+      return [];
+    } finally {
+      setLoading(false);
     }
+  }, [publicKey, toast]);
 
+  const finalizeBillionScaleTakeover = useCallback(async (takeover: FinalizableBillionScaleTakeover): Promise<boolean> => {
     if (!publicKey || !signTransaction) {
       toast({
         title: "Wallet Not Connected",
         description: "Please connect your wallet to finalize.",
         variant: "destructive"
       });
-      return;
+      return false;
+    }
+
+    // Check if this user is the authority for this takeover
+    if (takeover.authority !== publicKey.toString()) {
+      toast({
+        title: "Not Authorized",
+        description: "You can only finalize takeovers you created.",
+        variant: "destructive"
+      });
+      return false;
     }
 
     try {
-      setFinalizing(true);
+      setFinalizing(takeover.address);
       
-      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
-      console.log("🔍 Program ID being used:", programId.toString());
+      const takeoverPubkey = new PublicKey(takeover.address);
+      const isSuccessful = takeover.isGoalMet;
       
-      const takeoverPubkey = new PublicKey(takeoverAddress);
-      console.log(`🎯 Finalizing billion-scale takeover: ${takeoverAddress} (${isGoalMet ? 'Success' : 'Failed'})`);
+      console.log(`🎯 Finalizing billion-scale takeover: ${takeover.address} (${isSuccessful ? 'Success' : 'Failed'})`);
       
       let transaction: Transaction;
       let v2MintKeypair: Keypair | null = null;
       let v2TokenMint: string | null = null;
       
-      if (isGoalMet) {
-        // Create V2 mint for successful billion-scale takeovers
+      if (isSuccessful) {
+        // Create V2 mint for successful takeovers
         console.log('💎 Creating V2 mint for successful billion-scale takeover...');
         
         v2MintKeypair = Keypair.generate();
@@ -177,18 +200,18 @@ export function FinalizeButton({
       console.log('⏳ Waiting for confirmation...', signature);
       await connection.confirmTransaction(signature, 'confirmed');
       
-      console.log('✅ Transaction confirmed, recording billion-scale result in database...');
+      console.log('✅ Billion-scale transaction confirmed, recording in database...');
       
       // Record finalization in database
       const recordResponse = await fetch('/api/finalize', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          takeoverAddress,
+          takeoverAddress: takeover.address,
           authority: publicKey.toString(),
           transactionSignature: signature,
           v2TokenMint,
-          isSuccessful: isGoalMet
+          isSuccessful
         })
       });
       
@@ -203,50 +226,51 @@ export function FinalizeButton({
       }
       
       toast({
-        title: isGoalMet ? "🎉 Billion-Scale Takeover Successful!" : "⏰ Takeover Finalized",
-        description: isGoalMet 
-          ? `${tokenName} billion-scale takeover finalized! Conservative V2 tokens created for contributors with 2% safety margin.`
-          : `${tokenName} takeover finalized. Contributors can claim refunds.`,
+        title: isSuccessful ? "🎉 Billion-Scale Takeover Successful!" : "⏰ Billion-Scale Takeover Finalized",
+        description: isSuccessful 
+          ? `${takeover.tokenName} billion-scale takeover finalized with conservative safety features! V2 tokens created for contributors.`
+          : `${takeover.tokenName} billion-scale takeover finalized. Contributors can claim refunds with safety protections.`,
         duration: 8000
       });
       
-      // Call the onFinalized callback to refresh the parent component
-      if (onFinalized) {
-        onFinalized();
-      }
+      return true;
       
     } catch (error: any) {
       console.error('❌ Billion-scale finalization error:', error);
       toast({
-        title: "Finalization Failed",
+        title: "Billion-Scale Finalization Failed",
         description: error.message || 'An error occurred during billion-scale finalization',
         variant: "destructive"
       });
+      return false;
     } finally {
-      setFinalizing(false);
+      setFinalizing(null);
     }
-  };
+  }, [publicKey, signTransaction, connection, toast]);
 
-  return (
-    <Button 
-      onClick={handleFinalize}
-      disabled={finalizing}
-      className={`${
-        isGoalMet 
-          ? "bg-green-600 hover:bg-green-700" 
-          : "bg-yellow-600 hover:bg-yellow-700"
-      }`}
-    >
-      {finalizing ? (
-        <div className="flex items-center">
-          <LoadingSpinner />
-          <span className="ml-2">Finalizing...</span>
-        </div>
-      ) : (
-        <span>
-          {isGoalMet ? "🎉 Finalize Billion-Scale Success" : "⏰ Finalize Expired"}
-        </span>
-      )}
-    </Button>
-  );
+  const batchFinalizeTakeovers = useCallback(async (takeovers: FinalizableBillionScaleTakeover[]): Promise<void> => {
+    toast({
+      title: "Batch Finalization",
+      description: "Enhanced batch finalization for billion-scale takeovers is coming soon! For now, please finalize individually.",
+      duration: 6000
+    });
+  }, [toast]);
+
+  const getBillionScaleStatus = useCallback((takeover: FinalizableBillionScaleTakeover) => {
+    const rewardRate = takeover.rewardRateBp ? takeover.rewardRateBp / 100 : takeover.customRewardRate;
+    return {
+      rewardRateMultiplier: rewardRate / 100,
+      participationPercentage: (takeover.safetyUtilization || 0),
+      overflowRiskLevel: (takeover.safetyUtilization || 0) < 80 ? 'Low' : 'Medium'
+    };
+  }, []);
+
+  return {
+    loading,
+    finalizing,
+    fetchFinalizableTakeovers,
+    finalizeBillionScaleTakeover,
+    batchFinalizeTakeovers,
+    getBillionScaleStatus
+  };
 }

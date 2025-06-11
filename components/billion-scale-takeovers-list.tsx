@@ -1,3 +1,4 @@
+// components/billion-scale-takeovers-list.tsx - Updated for billion-scale takeovers
 "use client"
 
 import { useEffect, useState } from "react"
@@ -6,49 +7,22 @@ import { Progress } from "@/components/ui/progress"
 import { Button } from "@/components/ui/button"
 import { LoadingSpinner } from "@/components/loading-spinner"
 import { useToast } from "@/components/ui/use-toast"
-import { useAutoPoolCreation } from "@/hooks/use-auto-pool-creation"
 import Link from "next/link"
+import { BillionScaleHelpers, type Takeover } from "@/lib/types"
 
-interface Takeover {
-  id: number;
-  address: string;
-  authority: string;
-  v1_token_mint: string;
-  vault: string;
-  minAmount: string;
-  startTime: string;
-  endTime: string;
-  totalContributed: string;
-  contributorCount: number;
-  isFinalized: boolean;
-  isSuccessful: boolean;
-  hasV2Mint: boolean;
-  v2TokenMint?: string;
-  customRewardRate: number;
-  status: 'active' | 'ended' | 'successful' | 'failed' | 'goal_reached';
-  progressPercentage: number;
-  created_at: string;
-  tokenName: string;
-  imageUrl?: string;
-  finalize_tx?: string;
-}
-
-export function TakeoversList() {
+export function BillionScaleTakeoversList() {
   const [takeovers, setTakeovers] = useState<Takeover[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [debugMode, setDebugMode] = useState(false)
   const { toast } = useToast()
-  
-  // 🏊 AUTO-CREATE POOL SIMULATIONS FOR SUCCESSFUL TAKEOVERS
-  const { processedCount } = useAutoPoolCreation(takeovers);
 
   const fetchTakeovers = async () => {
     try {
       setLoading(true)
       setError(null)
       
-      console.log('🔄 Fetching takeovers...')
+      console.log('🔄 Fetching billion-scale takeovers...')
       
       const response = await fetch('/api/takeovers', {
         method: 'GET',
@@ -69,18 +43,23 @@ export function TakeoversList() {
       
       setTakeovers(data.takeovers || [])
       
-      // Log debug info
+      // Log debug info for billion-scale features
       const now = Math.floor(Date.now() / 1000)
       const readyCount = data.takeovers.filter((t: Takeover) => {
         if (t.isFinalized) return false
         const endTime = parseInt(t.endTime)
         const totalContributed = BigInt(t.totalContributed)
-        const minAmount = BigInt(t.minAmount)
+        const minAmount = BigInt(t.calculatedMinAmount || t.minAmount)
         return totalContributed >= minAmount || now >= endTime
       }).length
       
-      console.log(`✅ Loaded ${data.takeovers.length} takeovers, ${readyCount} ready for finalization`)
-      console.log(`🏊 Pool simulations auto-created for ${processedCount} successful takeovers`)
+      const billionScaleCount = data.takeovers.filter((t: Takeover) => 
+        t.rewardRateBp && t.v1TotalSupply && t.calculatedMinAmount
+      ).length
+      
+      console.log(`✅ Loaded ${data.takeovers.length} takeovers`)
+      console.log(`🛡️ ${billionScaleCount} billion-scale takeovers with conservative safety features`)
+      console.log(`⚡ ${readyCount} ready for finalization`)
       
     } catch (error: any) {
       console.error('❌ Error fetching takeovers:', error)
@@ -109,7 +88,7 @@ export function TakeoversList() {
     return (
       <div className="flex flex-col justify-center items-center h-64 space-y-4">
         <LoadingSpinner />
-        <span className="text-gray-600">Loading takeovers...</span>
+        <span className="text-gray-600">Loading billion-scale takeovers...</span>
       </div>
     )
   }
@@ -145,10 +124,10 @@ export function TakeoversList() {
           <CardContent className="pt-6">
             <h3 className="text-xl font-medium mb-2">No Takeovers Found</h3>
             <p className="text-gray-500 dark:text-gray-400 mb-4">
-              No takeover campaigns exist yet. Create the first one!
+              No billion-scale takeover campaigns exist yet. Create the first one!
             </p>
             <Link href="/create">
-              <Button>Create New Takeover</Button>
+              <Button>Create New Billion-Scale Takeover</Button>
             </Link>
           </CardContent>
         </Card>
@@ -166,26 +145,21 @@ export function TakeoversList() {
       if (t.isFinalized) return false
       const endTime = parseInt(t.endTime)
       const totalContributed = BigInt(t.totalContributed)
-      const minAmount = BigInt(t.minAmount)
+      const minAmount = BigInt(t.calculatedMinAmount || t.minAmount)
       return totalContributed >= minAmount || now >= endTime
     }).length,
     active: takeovers.filter(t => !t.isFinalized && t.status === 'active').length,
-    withPools: takeovers.filter(t => t.isFinalized && t.isSuccessful && t.v2TokenMint).length
+    billionScale: takeovers.filter(t => t.rewardRateBp && t.v1TotalSupply).length
   }
 
   return (
     <div className="w-full max-w-4xl mx-auto">
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold">Takeover Campaigns</h2>
+        <h2 className="text-2xl font-bold">Billion-Scale Takeover Campaigns</h2>
         <div className="flex items-center gap-4">
-          <span className="text-sm text-gray-500">{takeovers.length} campaign{takeovers.length !== 1 ? 's' : ''}</span>
-          {statusCounts.withPools > 0 && (
-            <Link href="/pools">
-              <Button variant="outline" size="sm">
-                🏊 {statusCounts.withPools} Pool{statusCounts.withPools !== 1 ? 's' : ''} Available
-              </Button>
-            </Link>
-          )}
+          <span className="text-sm text-gray-500">
+            {takeovers.length} campaign{takeovers.length !== 1 ? 's' : ''} • {statusCounts.billionScale} billion-scale
+          </span>
           <Button onClick={() => setDebugMode(!debugMode)} variant="ghost" size="sm">
             🐛 Debug
           </Button>
@@ -195,22 +169,34 @@ export function TakeoversList() {
         </div>
       </div>
 
-      {/* Pool Simulation Info */}
-      {statusCounts.withPools > 0 && (
+      {/* Billion-Scale Features Info */}
+      {statusCounts.billionScale > 0 && (
         <Card className="mb-6 border-blue-200 bg-blue-50">
           <CardHeader>
-            <CardTitle className="text-lg">🏊 Pool Simulations Available</CardTitle>
+            <CardTitle className="text-lg">🛡️ Conservative Billion-Scale Features</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-gray-600 mb-4">
-              {statusCounts.withPools} successful takeover{statusCounts.withPools !== 1 ? 's have' : ' has'} pool simulations available! 
-              Test trading mechanics for V2 tokens before creating real pools.
+              {statusCounts.billionScale} takeover{statusCounts.billionScale !== 1 ? 's' : ''} using conservative billion-scale technology with built-in safety features.
             </p>
-            <Link href="/pools">
-              <Button size="sm">
-                View Pool Simulator
-              </Button>
-            </Link>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs text-gray-600">
+              <div>
+                <div className="font-medium">Max Reward Rate</div>
+                <div>2.0x (conservative)</div>
+              </div>
+              <div>
+                <div className="font-medium">Safety Cushion</div>
+                <div>2% overflow protection</div>
+              </div>
+              <div>
+                <div className="font-medium">Token Scale</div>
+                <div>Billion-token support</div>
+              </div>
+              <div>
+                <div className="font-medium">Auto-Calculation</div>
+                <div>Proportionate goals</div>
+              </div>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -246,6 +232,10 @@ export function TakeoversList() {
                 <div className="text-lg">{takeovers.length}</div>
               </div>
               <div>
+                <div className="font-medium">Billion-Scale</div>
+                <div className="text-lg text-blue-600">{statusCounts.billionScale}</div>
+              </div>
+              <div>
                 <div className="font-medium">Active</div>
                 <div className="text-lg text-green-600">{statusCounts.active}</div>
               </div>
@@ -261,15 +251,9 @@ export function TakeoversList() {
                 <div className="font-medium">Failed</div>
                 <div className="text-lg text-red-600">{statusCounts.failed}</div>
               </div>
-              <div>
-                <div className="font-medium">With Pools</div>
-                <div className="text-lg text-blue-600">{statusCounts.withPools}</div>
-              </div>
             </div>
             <div className="mt-4 text-xs text-gray-600">
               Current timestamp: {now} ({new Date().toLocaleString()})
-              <br />
-              Auto-processed pools: {processedCount}
             </div>
           </CardContent>
         </Card>
@@ -283,6 +267,10 @@ export function TakeoversList() {
           const isEnded = takeover.status === 'ended'
           const isGoalReached = takeover.status === 'goal_reached'
           const isFinalized = takeover.isFinalized
+          const isBillionScale = !!(takeover.rewardRateBp && takeover.v1TotalSupply)
+          
+          // Get billion-scale status if applicable
+          const billionScaleStatus = isBillionScale ? BillionScaleHelpers.getBillionScaleStatus(takeover) : null;
 
           // Format time remaining
           let timeLeft = ""
@@ -317,6 +305,10 @@ export function TakeoversList() {
             statusColor = "bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
           }
 
+          const totalContributed = parseInt(takeover.totalContributed) / 1_000_000;
+          const goalAmount = parseInt(takeover.calculatedMinAmount || takeover.minAmount) / 1_000_000;
+          const rewardMultiplier = takeover.rewardRateBp ? takeover.rewardRateBp / 100 : takeover.customRewardRate;
+
           return (
             <Card key={takeover.id} className="hover:shadow-lg transition-shadow">
               <CardHeader className="pb-3">
@@ -338,7 +330,14 @@ export function TakeoversList() {
                       </div>
                     )}
                     <div>
-                      <span className="text-lg">{takeover.tokenName} Takeover</span>
+                      <div className="flex items-center gap-2">
+                        <span className="text-lg">{takeover.tokenName} Takeover</span>
+                        {isBillionScale && (
+                          <span className="text-xs px-2 py-1 bg-blue-100 text-blue-800 rounded-full">
+                            🛡️ Billion-Scale
+                          </span>
+                        )}
+                      </div>
                       <div className="text-sm text-gray-500 font-normal mt-1">
                         Token: {takeover.tokenName}
                         <br />
@@ -349,32 +348,29 @@ export function TakeoversList() {
                             {takeover.finalize_tx && (
                               <div>Finalize TX: {takeover.finalize_tx.slice(0, 8)}...</div>
                             )}
-                            {takeover.v2TokenMint && (
-                              <div>V2 Mint: {takeover.v2TokenMint.slice(0, 8)}...</div>
+                            {isBillionScale && (
+                              <div>Rate: {takeover.rewardRateBp}bp | Target: {takeover.targetParticipationBp}bp</div>
                             )}
                           </div>
                         )}
                       </div>
                     </div>
                   </div>
-                  <div className="flex flex-col items-end gap-2">
-                    <span className={`text-xs px-3 py-1 rounded-full ${statusColor}`}>
-                      {isActive ? "🟢 Active" : 
-                       isGoalReached ? "🎯 Goal Reached" :
-                       isEnded ? "⏰ Ended" : 
-                       timeLeft.includes("✅") ? "✅ Success" : "❌ Failed"}
-                    </span>
-                    {takeover.isFinalized && takeover.isSuccessful && takeover.v2TokenMint && (
-                      <Link href="/pools">
-                        <Button size="sm" variant="outline" className="text-xs">
-                          🏊 Pool Simulation
-                        </Button>
-                      </Link>
-                    )}
-                  </div>
+                  <span className={`text-xs px-3 py-1 rounded-full ${statusColor}`}>
+                    {isActive ? "🟢 Active" : 
+                     isGoalReached ? "🎯 Goal Reached" :
+                     isEnded ? "⏰ Ended" : 
+                     timeLeft.includes("✅") ? "✅ Success" : "❌ Failed"}
+                  </span>
                 </CardTitle>
                 <CardDescription>
                   Created by {takeover.authority.slice(0, 6)}...{takeover.authority.slice(-4)}
+                  {isBillionScale && billionScaleStatus && (
+                    <div className="mt-1 text-xs text-blue-600">
+                      Conservative rate: {billionScaleStatus.rewardRateMultiplier}x • 
+                      Safety: {billionScaleStatus.overflowRiskLevel} risk
+                    </div>
+                  )}
                 </CardDescription>
               </CardHeader>
               
@@ -383,16 +379,18 @@ export function TakeoversList() {
                   {/* Progress Section */}
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
-                      <span className="font-medium">Funding Progress</span>
+                      <span className="font-medium">
+                        {isBillionScale ? 'Conservative Funding Progress' : 'Funding Progress'}
+                      </span>
                       <span className="text-gray-600">
-                        {(parseInt(takeover.totalContributed) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} / {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}
+                        {totalContributed.toLocaleString(undefined, { maximumFractionDigits: 2 })} / {goalAmount.toLocaleString()} {takeover.tokenName}
                       </span>
                     </div>
                     <div className="space-y-1">
                       <Progress value={takeover.progressPercentage} className="h-2" />
                       <div className="flex justify-between text-xs text-gray-500">
                         <span>{takeover.progressPercentage.toFixed(1)}% complete</span>
-                        <span>Goal: {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
+                        <span>Goal: {goalAmount.toLocaleString()} {takeover.tokenName}</span>
                       </div>
                     </div>
                   </div>
@@ -409,20 +407,45 @@ export function TakeoversList() {
                     </div>
                     <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Reward Rate</div>
-                      <div className="text-sm font-medium">{takeover.customRewardRate}x</div>
+                      <div className="text-sm font-medium">{rewardMultiplier}x</div>
                     </div>
                   </div>
+
+                  {/* Billion-Scale Features */}
+                  {isBillionScale && billionScaleStatus && (
+                    <div className="bg-blue-50 border border-blue-200 p-3 rounded-lg">
+                      <div className="text-sm font-medium text-blue-800 mb-1">🛡️ Conservative Billion-Scale Features</div>
+                      <div className="grid grid-cols-2 gap-2 text-xs text-blue-700">
+                        <div>
+                          <span className="font-medium">V1 Supply:</span> {BillionScaleHelpers.formatTokenAmount(takeover.v1TotalSupply || '0')}
+                        </div>
+                        <div>
+                          <span className="font-medium">Participation:</span> {billionScaleStatus.participationPercentage.toFixed(1)}%
+                        </div>
+                        <div>
+                          <span className="font-medium">Overflow Risk:</span> {billionScaleStatus.overflowRiskLevel}
+                        </div>
+                        <div>
+                          <span className="font-medium">Safety Margin:</span> 2% cushion
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {/* V2 Token Info for Successful Takeovers */}
                   {isFinalized && takeover.isSuccessful && takeover.v2TokenMint && (
                     <div className="bg-green-50 border border-green-200 p-3 rounded-lg">
-                      <div className="text-sm font-medium text-green-800 mb-1">🎉 V2 Token Created</div>
+                      <div className="text-sm font-medium text-green-800 mb-1">
+                        {isBillionScale ? '🎉 Conservative V2 Token Created' : 'V2 Token Created'}
+                      </div>
                       <div className="text-xs font-mono text-green-600">
                         {takeover.v2TokenMint}
                       </div>
-                      <div className="text-xs text-green-700 mt-1">
-                        Pool simulation available • Contributors can claim rewards
-                      </div>
+                      {isBillionScale && (
+                        <div className="text-xs text-green-600 mt-1">
+                          Conservative allocation with 2% safety margin applied
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -430,26 +453,20 @@ export function TakeoversList() {
               
               <CardFooter>
                 {isFinalized ? (
-                  <div className="w-full flex gap-2">
-                    <Link href={`/claim/${takeover.address}`} className="flex-1">
-                      <Button 
-                        variant="outline" 
-                        className={`w-full ${takeover.isSuccessful 
-                          ? 'hover:bg-green-50 hover:border-green-300' 
-                          : 'hover:bg-red-50 hover:border-red-300'
-                        }`}
-                      >
-                        {takeover.isSuccessful ? "🎉 Claim V2 Tokens" : "💰 Claim Refund"}
-                      </Button>
-                    </Link>
-                    {takeover.isSuccessful && takeover.v2TokenMint && (
-                      <Link href="/pools">
-                        <Button variant="outline" size="sm">
-                          🏊 Pool
-                        </Button>
-                      </Link>
-                    )}
-                  </div>
+                  <Link href={`/claim/${takeover.address}`} className="w-full">
+                    <Button 
+                      variant="outline" 
+                      className={`w-full ${takeover.isSuccessful 
+                        ? 'hover:bg-green-50 hover:border-green-300' 
+                        : 'hover:bg-red-50 hover:border-red-300'
+                      }`}
+                    >
+                      {takeover.isSuccessful ? 
+                        (isBillionScale ? "🎉 Claim Conservative V2 Tokens" : "🎉 Claim V2 Tokens") : 
+                        "💰 Claim Refund"
+                      }
+                    </Button>
+                  </Link>
                 ) : (
                   <Link href={`/takeover/${takeover.address}`} className="w-full">
                     <Button variant="outline" className="w-full hover:bg-purple-50 hover:border-purple-300">
