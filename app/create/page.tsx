@@ -183,19 +183,33 @@ export default function CreatePage() {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      console.log("9. Transaction built with vault as additional signer");
+      // Sign transaction with vault keypair first
+      transaction.partialSign(vault);
       
-      // Send transaction with vault as additional signer
+      console.log("9. Transaction built and signed by vault");
+      
+      // Send transaction (wallet will sign automatically)
       console.log("10. Sending billion-scale transaction...");
       const signature = await sendTransaction(transaction, connection, {
-        signers: [vault] // Pass vault keypair as additional signer
+        skipPreflight: true,
+        preflightCommitment: "confirmed",
+        maxRetries: 3
       });
       
       console.log("11. Transaction sent, signature:", signature);
       
-      // Confirm transaction
+      // Confirm transaction with more robust method
       console.log("12. Confirming transaction...");
-      await connection.confirmTransaction(signature, "confirmed");
+      const { blockhash: confirmBlockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
+      const confirmation = await connection.confirmTransaction({
+        signature,
+        blockhash: confirmBlockhash,
+        lastValidBlockHeight
+      }, "confirmed");
+      
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+      }
       
       console.log("13. ✅ Billion-scale takeover created successfully!");
       
