@@ -12,7 +12,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID, TREASURY_ADDRESS } from "@/lib/constants";
 
-// Enhanced instruction creation for billion-scale
+// Enhanced function to create initialize_billion_scale instruction with proper validation
 function createInitializeBillionScaleInstruction(
   programId: PublicKey,
   authority: PublicKey,
@@ -24,38 +24,41 @@ function createInitializeBillionScaleInstruction(
   rewardRateBp: number,
   targetParticipationBp: number,
   v1MarketPriceLamports: bigint
-) {
-  const data = Buffer.alloc(1 + 8 + 2 + 2 + 8);
-  let offset = 0;
+): TransactionInstruction {
+  // Correct discriminator from IDL
+  const discriminator = Buffer.from([10, 1, 51, 248, 146, 123, 209, 48]);
   
-  // Instruction discriminator (using 0 for initialize)
-  data.writeUInt8(0, offset);
-  offset += 1;
+  // Serialize parameters with correct types (i64, u16, u16, u64)
+  const durationBuffer = Buffer.alloc(8);
+  durationBuffer.writeBigInt64LE(duration, 0);
   
-  // Duration (i64)
-  data.writeBigInt64LE(duration, offset);
-  offset += 8;
+  const rewardRateBpBuffer = Buffer.alloc(2);
+  rewardRateBpBuffer.writeUInt16LE(rewardRateBp, 0);
   
-  // Reward rate BP (u16)
-  data.writeUInt16LE(rewardRateBp, offset);
-  offset += 2;
+  const targetParticipationBpBuffer = Buffer.alloc(2);
+  targetParticipationBpBuffer.writeUInt16LE(targetParticipationBp, 0);
   
-  // Target participation BP (u16)
-  data.writeUInt16LE(targetParticipationBp, offset);
-  offset += 2;
+  const v1MarketPriceBuffer = Buffer.alloc(8);
+  v1MarketPriceBuffer.writeBigUInt64LE(v1MarketPriceLamports, 0);
   
-  // V1 market price lamports (u64)
-  data.writeBigUInt64LE(v1MarketPriceLamports, offset);
-  
+  const data = Buffer.concat([
+    discriminator,
+    durationBuffer,
+    rewardRateBpBuffer,
+    targetParticipationBpBuffer,
+    v1MarketPriceBuffer
+  ]);
+
+  // Account order must match IDL exactly
   const keys = [
     { pubkey: authority, isSigner: true, isWritable: true },
     { pubkey: treasury, isSigner: false, isWritable: true },
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
-    { pubkey: vault, isSigner: true, isWritable: true }, // ✅ FIXED: vault IS a signer for init
-    { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false }, // Token program
+    { pubkey: vault, isSigner: true, isWritable: true },
+    { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false }, // Rent sysvar
+    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
   ];
 
   return new TransactionInstruction({
@@ -157,7 +160,39 @@ export default function CreatePage() {
       const treasuryAddress = new PublicKey(TREASURY_ADDRESS);
       console.log("6. Using treasury address:", treasuryAddress.toString());
       
+      // Validate V1 token mint exists and has correct supply
+      console.log("7. Validating V1 token mint...");
+      try {
+        const mintInfo = await connection.getParsedAccountInfo(v1Mint);
+        if (!mintInfo.value || !('parsed' in mintInfo.value.data)) {
+          throw new Error("V1 token mint not found or invalid");
+        }
+        
+        const mintData = mintInfo.value.data.parsed.info;
+        const supply = BigInt(mintData.supply);
+        const decimals = mintData.decimals;
+        
+        console.log("   Mint supply:", supply.toString());
+        console.log("   Mint decimals:", decimals);
+        
+        // Check supply constraints (between 1M and 10B tokens with decimals)
+        const minSupply = BigInt(1_000_000) * BigInt(10 ** decimals); // 1M tokens
+        const maxSupply = BigInt(10_000_000_000) * BigInt(10 ** decimals); // 10B tokens
+        
+        if (supply < minSupply) {
+          throw new Error(`Token supply too small: ${supply} < ${minSupply} (minimum 1M tokens)`);
+        }
+        if (supply > maxSupply) {
+          throw new Error(`Token supply too large: ${supply} > ${maxSupply} (maximum 10B tokens)`);
+        }
+        
+        console.log("   ✅ Token mint validation passed");
+      } catch (error: any) {
+        throw new Error(`V1 token validation failed: ${error.message}`);
+      }
+      
       // Create the initialize_billion_scale instruction
+      console.log("8. Creating initialize instruction...");
       const initializeIx = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
@@ -171,14 +206,14 @@ export default function CreatePage() {
         v1MarketPriceLamports
       );
       
-      console.log("7. Initialize billion-scale instruction created");
+      console.log("9. Initialize billion-scale instruction created");
       
       // Build transaction
       const transaction = new Transaction();
       transaction.add(initializeIx);
       
       // Get recent blockhash and set fee payer
-      console.log("8. Getting recent blockhash...");
+      console.log("10. Getting recent blockhash...");
       const { blockhash } = await connection.getLatestBlockhash();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
@@ -186,20 +221,20 @@ export default function CreatePage() {
       // Sign with vault keypair first
       transaction.partialSign(vault);
       
-      console.log("9. Transaction built and signed by vault");
+      console.log("11. Transaction built and signed by vault");
       
       // Send transaction (wallet will sign automatically)
-      console.log("10. Sending transaction...");
+      console.log("12. Sending transaction...");
       const signature = await sendTransaction(transaction, connection, {
         skipPreflight: true,
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
       
-      console.log("11. Transaction sent, signature:", signature);
+      console.log("13. Transaction sent, signature:", signature);
       
       // Confirm transaction with better error handling
-      console.log("12. Confirming transaction...");
+      console.log("14. Confirming transaction...");
       try {
         const confirmation = await connection.confirmTransaction(signature, "confirmed");
         
@@ -208,7 +243,7 @@ export default function CreatePage() {
           throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
         }
         
-        console.log("13. ✅ Transaction confirmed successfully!");
+        console.log("15. ✅ Transaction confirmed successfully!");
       } catch (confirmError: any) {
         console.error("Confirmation error:", confirmError);
         
@@ -230,10 +265,10 @@ export default function CreatePage() {
         throw confirmError;
       }
       
-      console.log("14. ✅ Billion-scale takeover created successfully!");
+      console.log("16. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("15. Saving to database...");
+      console.log("17. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -263,7 +298,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("16. ✅ Saved to database successfully");
+        console.log("18. ✅ Saved to database successfully");
       }
       
       toast({
