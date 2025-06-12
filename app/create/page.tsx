@@ -183,25 +183,29 @@ export default function CreatePage() {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      console.log("9. Sending transaction with vault signer...");
+      // Sign with vault keypair first
+      transaction.partialSign(vault);
       
-      // Use sendTransaction with additional signers (this should work)
+      console.log("9. Transaction built and signed by vault");
+      
+      // Send transaction (wallet will sign automatically)
+      console.log("10. Sending transaction...");
       const signature = await sendTransaction(transaction, connection, {
-        signers: [vault],
-        skipPreflight: false,
-        preflightCommitment: "confirmed"
+        skipPreflight: true,
+        preflightCommitment: "confirmed",
+        maxRetries: 3
       });
       
-      console.log("10. Transaction sent, signature:", signature);
+      console.log("11. Transaction sent, signature:", signature);
       
       // Confirm transaction
-      console.log("11. Confirming transaction...");
+      console.log("12. Confirming transaction...");
       await connection.confirmTransaction(signature, "confirmed");
       
-      console.log("12. ✅ Billion-scale takeover created successfully!");
+      console.log("13. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("13. Saving to database...");
+      console.log("14. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -231,7 +235,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("14. ✅ Saved to database successfully");
+        console.log("15. ✅ Saved to database successfully");
       }
       
       toast({
