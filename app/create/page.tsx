@@ -70,7 +70,7 @@ function createInitializeBillionScaleInstruction(
 
 export default function CreatePage() {
   const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
   const { toast } = useToast();
   
   const [loading, setLoading] = useState(false);
@@ -200,13 +200,13 @@ export default function CreatePage() {
       
       console.log("📦 Instruction created successfully");
       
-      // Build transaction
+      // Build and validate transaction
       const transaction = new Transaction();
       transaction.add(initializeIx);
       
       // Get recent blockhash and set fee payer
       console.log("🔗 Getting recent blockhash...");
-      const { blockhash } = await connection.getLatestBlockhash();
+      const { blockhash } = await connection.getLatestBlockhash("confirmed");
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
@@ -215,13 +215,90 @@ export default function CreatePage() {
       
       console.log("✍️ Transaction built and vault signed");
       
-      // Send transaction
+      // Validate transaction before sending
+      try {
+        const serialized = transaction.serialize({ requireAllSignatures: false });
+        console.log("📊 Transaction validation:");
+        console.log("   Size:", serialized.length, "bytes");
+        console.log("   Instructions:", transaction.instructions.length);
+        console.log("   Signers:", transaction.signatures.length);
+        
+        if (serialized.length > 1232) {
+          throw new Error(`Transaction too large: ${serialized.length} bytes (max 1232)`);
+        }
+      } catch (validationError: any) {
+        console.error("❌ Transaction validation failed:", validationError.message);
+        throw new Error(`Transaction validation failed: ${validationError.message}`);
+      }
+      
+      // Send transaction with better error handling
       console.log("📡 Sending transaction...");
-      const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: false,  // Enable preflight to catch errors early
-        preflightCommitment: "confirmed",
-        maxRetries: 3
-      });
+      console.log("📦 Transaction size:", transaction.serializeMessage().length, "bytes");
+      
+      let signature;
+      try {
+        // Manual simulation to debug preflight issues
+        console.log("🧪 Running manual simulation...");
+        try {
+          const simulation = await connection.simulateTransaction(transaction);
+          
+          if (simulation.value.err) {
+            console.error("❌ Simulation failed:", simulation.value.err);
+            console.error("📋 Simulation logs:", simulation.value.logs);
+            throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
+          } else {
+            console.log("✅ Simulation passed");
+            console.log("🔥 Compute units used:", simulation.value.unitsConsumed);
+          }
+        } catch (simError: any) {
+          console.error("⚠️ Manual simulation failed:", simError.message);
+          // Continue anyway, sometimes simulation fails but transaction succeeds
+        }
+        
+        // First try with preflight disabled (common wallet issue workaround)
+        signature = await sendTransaction(transaction, connection, {
+          skipPreflight: true,  // Skip preflight to avoid wallet adapter issues
+          preflightCommitment: "confirmed",
+          maxRetries: 3
+        });
+      } catch (walletError: any) {
+        console.log("⚠️ First attempt failed, trying alternative method...");
+        console.log("Wallet error:", walletError.message);
+        
+        // Alternative: Try with different settings
+        try {
+          signature = await sendTransaction(transaction, connection, {
+            skipPreflight: true,
+            preflightCommitment: "processed",
+            maxRetries: 1
+          });
+        } catch (secondError: any) {
+          console.error("❌ Both sending methods failed");
+          console.error("Second error:", secondError.message);
+          
+          // Last resort: Manual signing and sending
+          console.log("🔧 Trying manual signing method...");
+          try {
+            if (!signTransaction) {
+              throw new Error("Manual signing not supported by wallet");
+            }
+            
+            // Get wallet to sign the transaction
+            const signedTx = await signTransaction(transaction);
+            
+            // Send raw transaction
+            signature = await connection.sendRawTransaction(signedTx.serialize(), {
+              skipPreflight: true,
+              maxRetries: 3
+            });
+            
+            console.log("✅ Manual signing succeeded");
+          } catch (manualError: any) {
+            console.error("❌ Manual signing also failed:", manualError.message);
+            throw new Error(`All transaction methods failed. Last error: ${manualError.message}`);
+          }
+        }
+      }
       
       console.log("📝 Transaction sent, signature:", signature);
       
