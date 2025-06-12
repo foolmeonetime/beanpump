@@ -55,7 +55,7 @@ function createInitializeBillionScaleInstruction(
     { pubkey: treasury, isSigner: false, isWritable: true },
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
-    { pubkey: vault, isSigner: false, isWritable: true }, // ✅ FIXED: vault should NOT be a signer for init
+    { pubkey: vault, isSigner: true, isWritable: true }, // ✅ FIXED: vault SHOULD be a signer according to IDL
     { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false },
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
