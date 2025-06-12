@@ -52,7 +52,7 @@ function createInitializeBillionScaleInstruction(
     { pubkey: treasury, isSigner: false, isWritable: true },
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
-    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: vault, isSigner: true, isWritable: true }, // ✅ FIXED: vault IS a signer for init
     { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false }, // Token program
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
     { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false }, // Rent sysvar
@@ -67,7 +67,7 @@ function createInitializeBillionScaleInstruction(
 
 export default function CreatePage() {
   const { connection } = useConnection();
-  const { publicKey, sendTransaction, signTransaction } = useWallet();
+  const { publicKey, sendTransaction } = useWallet();
   const { toast } = useToast();
   
   const [loading, setLoading] = useState(false);
@@ -140,7 +140,7 @@ export default function CreatePage() {
       
       console.log("3. Takeover PDA found:", takeoverPDA.toString(), "bump:", bump);
       
-      // Create vault keypair
+      // Create vault keypair (required for init constraint)
       const vault = Keypair.generate();
       console.log("4. Vault created:", vault.publicKey.toString());
       
@@ -183,41 +183,25 @@ export default function CreatePage() {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      // Sign transaction with vault keypair first
-      transaction.partialSign(vault);
+      console.log("9. Sending transaction with vault signer...");
       
-      console.log("9. Transaction built and signed by vault");
-      
-      // Sign with wallet and send raw transaction
-      console.log("10. Signing with wallet...");
-      const signedTransaction = await signTransaction!(transaction);
-      
-      console.log("11. Sending raw transaction...");
-      const signature = await connection.sendRawTransaction(signedTransaction.serialize(), {
-        skipPreflight: true,
-        preflightCommitment: "confirmed",
-        maxRetries: 3
+      // Use sendTransaction with additional signers (this should work)
+      const signature = await sendTransaction(transaction, connection, {
+        signers: [vault],
+        skipPreflight: false,
+        preflightCommitment: "confirmed"
       });
       
-      console.log("12. Transaction sent, signature:", signature);
+      console.log("10. Transaction sent, signature:", signature);
       
-      // Confirm transaction with more robust method
-      console.log("13. Confirming transaction...");
-      const { blockhash: confirmBlockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash: confirmBlockhash,
-        lastValidBlockHeight
-      }, "confirmed");
+      // Confirm transaction
+      console.log("11. Confirming transaction...");
+      await connection.confirmTransaction(signature, "confirmed");
       
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-      }
-      
-      console.log("14. ✅ Billion-scale takeover created successfully!");
+      console.log("12. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("15. Saving to database...");
+      console.log("13. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -247,7 +231,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("16. ✅ Saved to database successfully");
+        console.log("14. ✅ Saved to database successfully");
       }
       
       toast({
