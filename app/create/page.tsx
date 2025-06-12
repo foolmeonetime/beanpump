@@ -183,14 +183,13 @@ export default function CreatePage() {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      // Sign transaction with vault keypair
-      transaction.partialSign(vault);
+      console.log("9. Transaction built with vault as additional signer");
       
-      console.log("9. Transaction built and signed by vault");
-      
-      // Send transaction
+      // Send transaction with vault as additional signer
       console.log("10. Sending billion-scale transaction...");
-      const signature = await sendTransaction(transaction, connection);
+      const signature = await sendTransaction(transaction, connection, {
+        signers: [vault] // Pass vault keypair as additional signer
+      });
       
       console.log("11. Transaction sent, signature:", signature);
       
