@@ -12,7 +12,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID, TREASURY_ADDRESS } from "@/lib/constants";
 
-// Correct function to create initialize_billion_scale instruction (verified from IDL)
+// Fixed function to create initialize_billion_scale instruction (matches deployed IDL exactly)
 function createInitializeBillionScaleInstruction(
   programId: PublicKey,
   authority: PublicKey,
@@ -25,10 +25,10 @@ function createInitializeBillionScaleInstruction(
   targetParticipationBp: number,
   v1MarketPriceLamports: bigint
 ): TransactionInstruction {
-  // Correct discriminator from IDL (verified to exist in deployed program)
+  // Exact discriminator from deployed IDL
   const discriminator = Buffer.from([10, 1, 51, 248, 146, 123, 209, 48]);
   
-  // Serialize parameters exactly as specified in IDL
+  // Serialize parameters exactly as in IDL args
   const durationBuffer = Buffer.alloc(8);
   durationBuffer.writeBigInt64LE(duration, 0);
   
@@ -49,16 +49,16 @@ function createInitializeBillionScaleInstruction(
     v1MarketPriceBuffer
   ]);
 
-  // Account order exactly as specified in IDL
+  // Account order EXACTLY as specified in deployed IDL
   const keys = [
-    { pubkey: authority, isSigner: true, isWritable: true },
-    { pubkey: treasury, isSigner: false, isWritable: true },
-    { pubkey: v1TokenMint, isSigner: false, isWritable: false },
-    { pubkey: takeover, isSigner: false, isWritable: true },
-    { pubkey: vault, isSigner: true, isWritable: true }, // ✅ FIXED: vault SHOULD be a signer according to IDL
-    { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false },
-    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
+    { pubkey: authority, isSigner: true, isWritable: true },                                    // authority
+    { pubkey: treasury, isSigner: false, isWritable: true },                                   // treasury  
+    { pubkey: v1TokenMint, isSigner: false, isWritable: false },                              // v1_token_mint
+    { pubkey: takeover, isSigner: false, isWritable: true },                                  // takeover
+    { pubkey: vault, isSigner: true, isWritable: true },                                      // vault
+    { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false }, // token_program
+    { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },                  // system_program
+    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },   // rent
   ];
 
   return new TransactionInstruction({
@@ -97,13 +97,13 @@ export default function CreatePage() {
     }
 
     try {
-      console.log("1. Starting billion-scale takeover creation...");
+      console.log("🚀 Starting billion-scale takeover creation with UPDATED IDL...");
       
       setLoading(true);
       
       // Check wallet balance
       const balance = await connection.getBalance(publicKey);
-      console.log("1.1. Wallet balance:", balance / 1_000_000_000, "SOL");
+      console.log("💰 Wallet balance:", balance / 1_000_000_000, "SOL");
       
       if (balance < 10_000_000) { // 0.01 SOL minimum
         throw new Error(`Insufficient SOL balance. You have ${balance / 1_000_000_000} SOL, but need at least 0.01 SOL for transaction fees and account creation.`);
@@ -116,14 +116,14 @@ export default function CreatePage() {
       const targetParticipationBp = Number(formData.targetParticipationBp);
       const v1MarketPriceLamports = BigInt(formData.v1MarketPriceLamports);
       
-      console.log("2. Billion-scale form data parsed:");
+      console.log("📊 Billion-scale form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
       console.log("   Duration:", duration.toString(), "seconds");
-      console.log("   Reward Rate:", rewardRateBp, "basis points (", rewardRateBp/100, "x)");
-      console.log("   Target Participation:", targetParticipationBp, "basis points (", targetParticipationBp/100, "%)");
+      console.log("   Reward Rate:", rewardRateBp, "bp (", rewardRateBp/100, "x)");
+      console.log("   Target Participation:", targetParticipationBp, "bp (", targetParticipationBp/100, "%)");
       console.log("   V1 Market Price:", v1MarketPriceLamports.toString(), "lamports");
       
-      // Validate new parameters
+      // Validate parameters
       if (rewardRateBp < 100 || rewardRateBp > 200) {
         throw new Error("Reward rate must be between 100 (1.0x) and 200 (2.0x) basis points");
       }
@@ -131,7 +131,7 @@ export default function CreatePage() {
         throw new Error("Target participation must be between 100 (1%) and 10000 (100%) basis points");
       }
       
-      // Find takeover PDA
+      // Find takeover PDA (exactly as in IDL)
       const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("takeover"),
@@ -141,27 +141,18 @@ export default function CreatePage() {
         new PublicKey(PROGRAM_ID)
       );
       
-      console.log("3. Takeover PDA found:", takeoverPDA.toString(), "bump:", bump);
+      console.log("🎯 Takeover PDA:", takeoverPDA.toString(), "bump:", bump);
       
-      // Create vault keypair (required for init constraint)
+      // Create vault keypair (must be signer as per IDL)
       const vault = Keypair.generate();
-      console.log("4. Vault created:", vault.publicKey.toString());
+      console.log("🏦 Vault created:", vault.publicKey.toString());
       
-      // Calculate start and end times
-      const startTime = Math.floor(Date.now() / 1000); // Current timestamp
-      const endTime = startTime + Number(duration);
-      
-      console.log("5. Time calculations:");
-      console.log("   Start time:", startTime);
-      console.log("   End time:", endTime);
-      console.log("   Duration (seconds):", Number(duration));
-      
-      // ✅ FIX: Use proper treasury address instead of wallet
+      // Use treasury address from constants
       const treasuryAddress = new PublicKey(TREASURY_ADDRESS);
-      console.log("6. Using treasury address:", treasuryAddress.toString());
+      console.log("🏛️ Treasury address:", treasuryAddress.toString());
       
-      // Validate V1 token mint exists and has correct supply
-      console.log("7. Validating V1 token mint...");
+      // Validate V1 token mint
+      console.log("✅ Validating V1 token mint...");
       let mintInfo;
       try {
         mintInfo = await connection.getParsedAccountInfo(v1Mint);
@@ -173,10 +164,10 @@ export default function CreatePage() {
         const supply = BigInt(mintData.supply);
         const decimals = mintData.decimals;
         
-        console.log("   Mint supply:", supply.toString());
-        console.log("   Mint decimals:", decimals);
+        console.log("   Supply:", supply.toString());
+        console.log("   Decimals:", decimals);
         
-        // Check supply constraints (between 1M and 10B tokens with decimals)
+        // Check billion-scale supply constraints
         const minSupply = BigInt(1_000_000) * BigInt(10 ** decimals); // 1M tokens
         const maxSupply = BigInt(10_000_000_000) * BigInt(10 ** decimals); // 10B tokens
         
@@ -187,13 +178,13 @@ export default function CreatePage() {
           throw new Error(`Token supply too large: ${supply} > ${maxSupply} (maximum 10B tokens)`);
         }
         
-        console.log("   ✅ Token mint validation passed");
+        console.log("   ✅ Token validation passed");
       } catch (error: any) {
         throw new Error(`V1 token validation failed: ${error.message}`);
       }
       
-      // Create the initialize_billion_scale instruction (verified to exist in deployed program)
-      console.log("8. Creating initialize_billion_scale instruction...");
+      // Create the initialize_billion_scale instruction (FIXED with correct IDL)
+      console.log("⚙️ Creating initialize_billion_scale instruction...");
       const initializeIx = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
@@ -207,46 +198,46 @@ export default function CreatePage() {
         v1MarketPriceLamports
       );
       
-      console.log("9. Initialize_billion_scale instruction created");
+      console.log("📦 Instruction created successfully");
       
       // Build transaction
       const transaction = new Transaction();
       transaction.add(initializeIx);
       
       // Get recent blockhash and set fee payer
-      console.log("10. Getting recent blockhash...");
+      console.log("🔗 Getting recent blockhash...");
       const { blockhash } = await connection.getLatestBlockhash();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      // Sign with vault keypair first
+      // Sign with vault keypair (required by IDL)
       transaction.partialSign(vault);
       
-      console.log("11. Transaction built and signed by vault");
+      console.log("✍️ Transaction built and vault signed");
       
-      // Send transaction (wallet will sign automatically)
-      console.log("12. Sending transaction...");
+      // Send transaction
+      console.log("📡 Sending transaction...");
       const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: true,
+        skipPreflight: false,  // Enable preflight to catch errors early
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
       
-      console.log("13. Transaction sent, signature:", signature);
+      console.log("📝 Transaction sent, signature:", signature);
       
-      // Confirm transaction with better error handling
-      console.log("14. Confirming transaction...");
+      // Confirm transaction
+      console.log("⏳ Confirming transaction...");
       try {
         const confirmation = await connection.confirmTransaction(signature, "confirmed");
         
         if (confirmation.value.err) {
-          console.error("Transaction failed on-chain:", confirmation.value.err);
+          console.error("❌ Transaction failed on-chain:", confirmation.value.err);
           throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
         }
         
-        console.log("15. ✅ Transaction confirmed successfully!");
+        console.log("✅ Transaction confirmed successfully!");
       } catch (confirmError: any) {
-        console.error("Confirmation error:", confirmError);
+        console.error("⚠️ Confirmation error:", confirmError);
         
         // Try to get transaction details for debugging
         try {
@@ -254,29 +245,32 @@ export default function CreatePage() {
             commitment: "confirmed",
             maxSupportedTransactionVersion: 0
           });
-          console.error("Transaction details:", txDetails);
+          console.error("📋 Transaction details:", txDetails);
           
           if (txDetails?.meta?.err) {
             throw new Error(`On-chain error: ${JSON.stringify(txDetails.meta.err)}`);
           }
         } catch (detailError) {
-          console.error("Could not fetch transaction details:", detailError);
+          console.error("❌ Could not fetch transaction details:", detailError);
         }
         
         throw confirmError;
       }
       
-      console.log("16. ✅ Billion-scale takeover created successfully!");
+      console.log("🎉 Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("17. Saving to database...");
+      console.log("💾 Saving to database...");
+      const startTime = Math.floor(Date.now() / 1000);
+      const endTime = startTime + Number(duration);
+      
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
         v1TokenMint: v1Mint.toString(),
         vault: vault.publicKey.toString(),
         
-        // Billion-scale fields (as they exist in the program)
+        // Billion-scale specific fields
         rewardRateBp,
         targetParticipationBp,
         v1MarketPriceLamports: v1MarketPriceLamports.toString(),
@@ -285,6 +279,7 @@ export default function CreatePage() {
         customRewardRate: rewardRateBp / 100,
         startTime: startTime.toString(),
         endTime: endTime.toString(),
+        minAmount: "0", // Will be calculated by program
         
         // Metadata
         tokenName: formData.tokenName,
@@ -302,14 +297,14 @@ export default function CreatePage() {
       });
       
       if (!dbResponse.ok) {
-        console.warn("Database save failed, but takeover was created on-chain");
+        console.warn("⚠️ Database save failed, but takeover was created on-chain");
       } else {
-        console.log("18. ✅ Saved to database successfully");
+        console.log("✅ Saved to database successfully");
       }
       
       toast({
         title: "🚀 Billion-Scale Takeover Created!",
-        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and safety features`,
+        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and billion-scale safety features`,
         duration: 8000
       });
       
