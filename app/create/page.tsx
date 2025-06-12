@@ -1,25 +1,18 @@
 "use client";
+
 import { useState } from "react";
 import { useConnection, useWallet } from "@solana/wallet-adapter-react";
-import { 
-  PublicKey, 
-  Transaction, 
-  TransactionInstruction,
-  SystemProgram,
-  SYSVAR_RENT_PUBKEY,
-  Keypair
-} from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
+import { PublicKey, Keypair, Transaction, SystemProgram } from "@solana/web3.js";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
-import { PROGRAM_ID } from "@/lib/constants";
-import { ImageUpload } from "@/components/image-upload";
+import { PROGRAM_ID, TREASURY_ADDRESS } from "@/lib/constants";
 
-// Function to create initialize_billion_scale instruction manually
+// Enhanced instruction creation for billion-scale
 function createInitializeBillionScaleInstruction(
   programId: PublicKey,
   authority: PublicKey,
@@ -31,85 +24,85 @@ function createInitializeBillionScaleInstruction(
   rewardRateBp: number,
   targetParticipationBp: number,
   v1MarketPriceLamports: bigint
-): TransactionInstruction {
-  // Create instruction data buffer
-  // This is the discriminator for "initialize_billion_scale" method from your new IDL
-  const discriminator = Buffer.from([10, 1, 51, 248, 146, 123, 209, 48]);
+) {
+  const data = Buffer.alloc(1 + 8 + 2 + 2 + 8);
+  let offset = 0;
   
-  // Serialize the parameters
-  const durationBuffer = Buffer.alloc(8);
-  durationBuffer.writeBigInt64LE(duration, 0);
+  // Instruction discriminator (using 0 for initialize)
+  data.writeUInt8(0, offset);
+  offset += 1;
   
-  const rewardRateBpBuffer = Buffer.alloc(2);
-  rewardRateBpBuffer.writeUInt16LE(rewardRateBp, 0);
+  // Duration (i64)
+  data.writeBigInt64LE(duration, offset);
+  offset += 8;
   
-  const targetParticipationBpBuffer = Buffer.alloc(2);
-  targetParticipationBpBuffer.writeUInt16LE(targetParticipationBp, 0);
+  // Reward rate BP (u16)
+  data.writeUInt16LE(rewardRateBp, offset);
+  offset += 2;
   
-  const v1MarketPriceBuffer = Buffer.alloc(8);
-  v1MarketPriceBuffer.writeBigUInt64LE(v1MarketPriceLamports, 0);
+  // Target participation BP (u16)
+  data.writeUInt16LE(targetParticipationBp, offset);
+  offset += 2;
   
-  const data = Buffer.concat([
-    discriminator,
-    durationBuffer,
-    rewardRateBpBuffer,
-    targetParticipationBpBuffer,
-    v1MarketPriceBuffer
-  ]);
-
+  // V1 market price lamports (u64)
+  data.writeBigUInt64LE(v1MarketPriceLamports, offset);
+  
   const keys = [
     { pubkey: authority, isSigner: true, isWritable: true },
     { pubkey: treasury, isSigner: false, isWritable: true },
     { pubkey: v1TokenMint, isSigner: false, isWritable: false },
     { pubkey: takeover, isSigner: false, isWritable: true },
-    { pubkey: vault, isSigner: true, isWritable: true },
-    { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+    { pubkey: vault, isSigner: false, isWritable: true },
+    { pubkey: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"), isSigner: false, isWritable: false }, // Token program
     { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-    { pubkey: SYSVAR_RENT_PUBKEY, isSigner: false, isWritable: false },
+    { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false }, // Rent sysvar
   ];
 
-  return new TransactionInstruction({
+  return new (Transaction as any).Instruction({
     keys,
     programId,
     data,
   });
 }
 
-export default function CreateTakeover() {
+export default function CreatePage() {
   const { connection } = useConnection();
   const { publicKey, sendTransaction } = useWallet();
   const { toast } = useToast();
+  
   const [loading, setLoading] = useState(false);
   const [formData, setFormData] = useState({
-    v1TokenMint: "So11111111111111111111111111111111111111112",
+    v1TokenMint: "",
     duration: "7",
-    rewardRateBp: "150", // 1.5x in basis points (150/100 = 1.5x)
-    targetParticipationBp: "1000", // 10% in basis points (1000/100 = 10%)
-    v1MarketPriceLamports: "1000000", // 0.001 SOL per token
-    tokenName: "Test Token",
+    rewardRateBp: "125",
+    targetParticipationBp: "3000",
+    v1MarketPriceLamports: "1000000",
+    tokenName: "",
     imageUrl: ""
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    
     if (!publicKey) {
       toast({
-        title: "Wallet Error",
-        description: "Please connect your wallet",
+        title: "Wallet Not Connected",
+        description: "Please connect your wallet to create a takeover",
         variant: "destructive"
       });
       return;
     }
 
     try {
-      setLoading(true);
       console.log("1. Starting billion-scale takeover creation...");
+      
+      setLoading(true);
       
       // Check wallet balance
       const balance = await connection.getBalance(publicKey);
       console.log("1.1. Wallet balance:", balance / 1_000_000_000, "SOL");
       
-      if (balance < 10_000_000) { // Less than 0.01 SOL
+      if (balance < 10_000_000) { // 0.01 SOL minimum
         throw new Error(`Insufficient SOL balance. You have ${balance / 1_000_000_000} SOL, but need at least 0.01 SOL for transaction fees and account creation.`);
       }
       
@@ -160,11 +153,15 @@ export default function CreateTakeover() {
       console.log("   End time:", endTime);
       console.log("   Duration (seconds):", Number(duration));
       
+      // ✅ FIX: Use proper treasury address instead of wallet
+      const treasuryAddress = new PublicKey(TREASURY_ADDRESS);
+      console.log("6. Using treasury address:", treasuryAddress.toString());
+      
       // Create the initialize_billion_scale instruction
       const initializeIx = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
-        publicKey, // Using wallet as treasury
+        treasuryAddress, // ✅ FIXED: Use proper treasury address
         v1Mint,
         takeoverPDA,
         vault.publicKey,
@@ -174,120 +171,87 @@ export default function CreateTakeover() {
         v1MarketPriceLamports
       );
       
-      console.log("6. Initialize billion-scale instruction created");
+      console.log("7. Initialize billion-scale instruction created");
       
-      // Create and send transaction with legacy format
+      // Build transaction
       const transaction = new Transaction();
       transaction.add(initializeIx);
       
-      // Set recent blockhash and fee payer
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-      
-      // Sign with vault keypair
+      // Sign transaction with vault keypair
       transaction.partialSign(vault);
       
-      console.log("7. Transaction built and signed by vault");
+      console.log("8. Transaction built and signed by vault");
       
       // Send transaction
-      console.log("8. Sending billion-scale transaction...");
-      const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: true,
-        preflightCommitment: "confirmed",
-        maxRetries: 3
+      console.log("9. Sending billion-scale transaction...");
+      const signature = await sendTransaction(transaction, connection);
+      
+      console.log("10. Transaction sent, signature:", signature);
+      
+      // Confirm transaction
+      console.log("11. Confirming transaction...");
+      await connection.confirmTransaction(signature, "confirmed");
+      
+      console.log("12. ✅ Billion-scale takeover created successfully!");
+      
+      // Save to database
+      console.log("13. Saving to database...");
+      const dbPayload = {
+        address: takeoverPDA.toString(),
+        authority: publicKey.toString(),
+        v1TokenMint: v1Mint.toString(),
+        vault: vault.publicKey.toString(),
+        
+        // Enhanced billion-scale fields
+        rewardRateBp,
+        targetParticipationBp,
+        v1MarketPriceLamports: v1MarketPriceLamports.toString(),
+        
+        // Metadata
+        tokenName: formData.tokenName,
+        imageUrl: formData.imageUrl,
+        
+        // Transaction info
+        signature,
+        created_at: new Date().toISOString(),
+      };
+      
+      const dbResponse = await fetch('/api/takeovers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(dbPayload)
       });
       
-      console.log("9. Transaction sent, signature:", signature);
-      
-      // Wait for confirmation
-      const confirmation = await connection.confirmTransaction({
-        signature,
-        blockhash,
-        lastValidBlockHeight
-      }, "confirmed");
-      
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-      }
-      
-      console.log("10. Transaction confirmed! Now saving to database...");
-      
-      // Save to database after successful blockchain transaction
-      try {
-        const dbResponse = await fetch('/api/takeovers', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            address: takeoverPDA.toString(),
-            authority: publicKey.toString(),
-            v1TokenMint: v1Mint.toString(),
-            vault: vault.publicKey.toString(),
-            // NOTE: The backend will need to be updated to handle the new billion-scale fields
-            minAmount: "0", // Will be calculated by the program
-            startTime: startTime.toString(),
-            endTime: endTime.toString(),
-            customRewardRate: rewardRateBp / 100, // Convert basis points to decimal
-            tokenName: formData.tokenName,
-            imageUrl: formData.imageUrl,
-            // New fields for billion-scale
-            rewardRateBp: rewardRateBp,
-            targetParticipationBp: targetParticipationBp,
-            v1MarketPriceLamports: v1MarketPriceLamports.toString()
-          })
-        });
-
-        if (!dbResponse.ok) {
-          const errorData = await dbResponse.json();
-          throw new Error(`Database save failed: ${errorData.error || 'Unknown error'}`);
-        }
-
-        const dbResult = await dbResponse.json();
-        console.log("11. Successfully saved billion-scale takeover to database:", dbResult);
-        
-      } catch (dbError) {
-        console.error("Database save error:", dbError);
-        // Don't fail the entire operation for database errors
-        // The blockchain transaction succeeded, which is most important
-        toast({
-          title: "Partial Success",
-          description: "Billion-scale takeover created on blockchain but failed to save to database. Check console for details.",
-          variant: "destructive"
-        });
+      if (!dbResponse.ok) {
+        console.warn("Database save failed, but takeover was created on-chain");
+      } else {
+        console.log("14. ✅ Saved to database successfully");
       }
       
       toast({
-        title: "Billion-Scale Takeover Created Successfully! 🎉",
-        description: `Conservative billion-scale takeover created! View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
-        duration: 10000
+        title: "🚀 Billion-Scale Takeover Created!",
+        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and 2% safety cushion`,
+        duration: 8000
       });
-
+      
       // Reset form
       setFormData({
-        v1TokenMint: "So11111111111111111111111111111111111111112",
+        v1TokenMint: "",
         duration: "7",
-        rewardRateBp: "150",
-        targetParticipationBp: "1000",
+        rewardRateBp: "125",
+        targetParticipationBp: "3000", 
         v1MarketPriceLamports: "1000000",
-        tokenName: "Test Token",
+        tokenName: "",
         imageUrl: ""
       });
-
-    } catch (error: any) {
-      console.error("Billion-scale creation failed:");
-      console.error("Error:", error);
-      console.error("Error message:", error.message);
       
-      let errorMsg = "Transaction failed";
-      if (error.message) {
-        errorMsg = error.message;
-      }
+    } catch (error: any) {
+      console.error("💥 Billion-scale creation failed:");
+      console.error("Error message:", error.message);
       
       toast({
         title: "Creation Failed",
-        description: errorMsg,
+        description: error.message || "Unknown error occurred",
         variant: "destructive"
       });
     } finally {
@@ -295,125 +259,154 @@ export default function CreateTakeover() {
     }
   };
 
+  if (!publicKey) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+        <h1 className="text-2xl font-bold">Create Takeover Campaign</h1>
+        <p className="text-muted-foreground">Connect your wallet to create a new community takeover</p>
+        <WalletMultiButton />
+      </div>
+    );
+  }
+
   return (
-    <div className="max-w-2xl mx-auto py-8">
+    <div className="max-w-4xl mx-auto py-8 space-y-8">
       <Card>
         <CardHeader>
-          <CardTitle>Create Billion-Scale Community Takeover</CardTitle>
+          <CardTitle>🚀 Create Billion-Scale Community Takeover</CardTitle>
           <CardDescription>
-            Conservative billion-token takeover with 2% safety cushion and 2.0x max rewards
-            <br />
-            Program ID: {PROGRAM_ID}
-            <br />
-            Connected: {publicKey?.toString().slice(0, 8)}...{publicKey?.toString().slice(-4)}
+            Initialize a conservative takeover campaign with billion-scale safety features and 2% overflow protection
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="tokenName">Token Name</Label>
-              <Input
-                id="tokenName"
-                value={formData.tokenName}
-                onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
-                placeholder="My Billion Token"
-                required
-              />
+            {/* V1 Token Section */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Token Information</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="v1TokenMint">V1 Token Mint Address *</Label>
+                  <Input
+                    id="v1TokenMint"
+                    value={formData.v1TokenMint}
+                    onChange={(e) => setFormData(prev => ({ ...prev, v1TokenMint: e.target.value }))}
+                    placeholder="Token mint address"
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="tokenName">Token Name</Label>
+                  <Input
+                    id="tokenName"
+                    value={formData.tokenName}
+                    onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
+                    placeholder="My Awesome Token"
+                  />
+                </div>
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="imageUrl">Token Image URL (optional)</Label>
+                <Input
+                  id="imageUrl"
+                  value={formData.imageUrl}
+                  onChange={(e) => setFormData(prev => ({ ...prev, imageUrl: e.target.value }))}
+                  placeholder="https://example.com/token-image.png"
+                />
+              </div>
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="v1TokenMint">V1 Token Mint Address</Label>
-              <Input
-                id="v1TokenMint"
-                value={formData.v1TokenMint}
-                onChange={(e) => setFormData(prev => ({ ...prev, v1TokenMint: e.target.value }))}
-                placeholder="Token mint address"
-                required
-              />
-              <p className="text-sm text-gray-500">
-                Must have supply between 1M - 10B tokens for safety
-              </p>
+            {/* Campaign Parameters */}
+            <div className="space-y-4">
+              <h3 className="text-lg font-semibold">Campaign Parameters</h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="duration">Duration (days) *</Label>
+                  <Input
+                    id="duration"
+                    type="number"
+                    min="1"
+                    max="30"
+                    value={formData.duration}
+                    onChange={(e) => setFormData(prev => ({ ...prev, duration: e.target.value }))}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="rewardRateBp">Reward Rate (basis points) *</Label>
+                  <Input
+                    id="rewardRateBp"
+                    type="number"
+                    min="100"
+                    max="200"
+                    value={formData.rewardRateBp}
+                    onChange={(e) => setFormData(prev => ({ ...prev, rewardRateBp: e.target.value }))}
+                    required
+                  />
+                  <p className="text-xs text-gray-500">
+                    100 = 1.0x, 125 = 1.25x, 150 = 1.5x, 200 = 2.0x (max)
+                  </p>
+                </div>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="targetParticipationBp">Target Participation (basis points) *</Label>
+                  <Input
+                    id="targetParticipationBp"
+                    type="number"
+                    min="100"
+                    max="10000"
+                    value={formData.targetParticipationBp}
+                    onChange={(e) => setFormData(prev => ({ ...prev, targetParticipationBp: e.target.value }))}
+                    required
+                  />
+                  <p className="text-xs text-gray-500">
+                    100 = 1%, 1000 = 10%, 3000 = 30%, 10000 = 100%
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="v1MarketPriceLamports">V1 Token Price (lamports) *</Label>
+                  <Input
+                    id="v1MarketPriceLamports"
+                    type="number"
+                    min="1"
+                    value={formData.v1MarketPriceLamports}
+                    onChange={(e) => setFormData(prev => ({ ...prev, v1MarketPriceLamports: e.target.value }))}
+                    required
+                  />
+                  <p className="text-xs text-gray-500">
+                    1000000 = 0.001 SOL per token
+                  </p>
+                </div>
+              </div>
             </div>
 
-            {/* Image Upload Section */}
-            <ImageUpload
-              onImageUploaded={(imageUrl) => setFormData(prev => ({ ...prev, imageUrl }))}
-              currentImageUrl={formData.imageUrl}
-              label="Takeover Image"
-            />
-
-            <div className="space-y-2">
-              <Label htmlFor="duration">Duration (Days)</Label>
-              <Input
-                id="duration"
-                type="number"
-                value={formData.duration}
-                onChange={(e) => setFormData(prev => ({ ...prev, duration: e.target.value }))}
-                min="1"
-                max="30"
-                required
-              />
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="rewardRateBp">Reward Rate (Basis Points)</Label>
-              <Input
-                id="rewardRateBp"
-                type="number"
-                value={formData.rewardRateBp}
-                onChange={(e) => setFormData(prev => ({ ...prev, rewardRateBp: e.target.value }))}
-                min="100"
-                max="200"
-                required
-              />
-              <p className="text-sm text-gray-500">
-                100 = 1.0x, 150 = 1.5x, 200 = 2.0x (conservative max)
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="targetParticipationBp">Target Participation (Basis Points)</Label>
-              <Input
-                id="targetParticipationBp"
-                type="number"
-                value={formData.targetParticipationBp}
-                onChange={(e) => setFormData(prev => ({ ...prev, targetParticipationBp: e.target.value }))}
-                min="100"
-                max="10000"
-                required
-              />
-              <p className="text-sm text-gray-500">
-                1000 = 10%, 2000 = 20%, etc. (determines minimum goal)
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="v1MarketPriceLamports">V1 Market Price (Lamports)</Label>
-              <Input
-                id="v1MarketPriceLamports"
-                type="number"
-                value={formData.v1MarketPriceLamports}
-                onChange={(e) => setFormData(prev => ({ ...prev, v1MarketPriceLamports: e.target.value }))}
-                min="1"
-                required
-              />
-              <p className="text-sm text-gray-500">
-                1,000,000 = 0.001 SOL per token (for liquidity calculations)
-              </p>
-            </div>
-
+            {/* Safety Information */}
             <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
-              <p className="text-sm text-blue-800 dark:text-blue-200">
-                🛡️ <strong>Conservative Safety Features:</strong>
-                <br />• Maximum 2.0x reward rate for sustainability
-                <br />• Built-in 2% safety cushion to prevent overflow
-                <br />• Proportionate goals based on billion-token scale
-                <br />• Automatic overflow protection
-              </p>
+              <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">🛡️ Conservative Safety Features</h4>
+              <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
+                <li>• Maximum reward rate capped at 2.0x for sustainability</li>
+                <li>• 2% overflow protection cushion built-in</li>
+                <li>• Proportionate minimum amount calculation</li>
+                <li>• Conservative billion-scale token economics</li>
+                <li>• Automatic refunds if campaign fails</li>
+              </ul>
             </div>
 
-            <Button type="submit" disabled={loading} className="w-full">
-              {loading ? <LoadingSpinner /> : "Create Billion-Scale Takeover"}
+            <Button 
+              type="submit" 
+              disabled={loading}
+              className="w-full"
+            >
+              {loading ? (
+                <>
+                  <LoadingSpinner />
+                  Creating Billion-Scale Takeover...
+                </>
+              ) : (
+                "🚀 Create Conservative Takeover"
+              )}
             </Button>
           </form>
         </CardContent>
