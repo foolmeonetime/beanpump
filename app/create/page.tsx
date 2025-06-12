@@ -111,14 +111,14 @@ export default function CreatePage() {
       
       // Parse form data
       const v1Mint = new PublicKey(formData.v1TokenMint);
-      const duration = BigInt(Number(formData.duration) * 86400); // days to seconds
+      const duration = BigInt(Number(formData.duration)); // ✅ FIXED: Pass days directly, not seconds
       const rewardRateBp = Number(formData.rewardRateBp);
       const targetParticipationBp = Number(formData.targetParticipationBp);
       const v1MarketPriceLamports = BigInt(formData.v1MarketPriceLamports);
       
       console.log("📊 Billion-scale form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
-      console.log("   Duration:", duration.toString(), "seconds");
+      console.log("   Duration:", duration.toString(), "days (", Number(duration) * 86400, "seconds)"); // ✅ FIXED: Now shows days
       console.log("   Reward Rate:", rewardRateBp, "bp (", rewardRateBp/100, "x)");
       console.log("   Target Participation:", targetParticipationBp, "bp (", targetParticipationBp/100, "%)");
       console.log("   V1 Market Price:", v1MarketPriceLamports.toString(), "lamports");
@@ -129,6 +129,9 @@ export default function CreatePage() {
       }
       if (targetParticipationBp < 100 || targetParticipationBp > 10000) {
         throw new Error("Target participation must be between 100 (1%) and 10000 (100%) basis points");
+      }
+      if (Number(duration) < 1 || Number(duration) > 30) {
+        throw new Error("Duration must be between 1 and 30 days");
       }
       
       // Find takeover PDA (exactly as in IDL)
@@ -339,7 +342,7 @@ export default function CreatePage() {
       // Save to database
       console.log("💾 Saving to database...");
       const startTime = Math.floor(Date.now() / 1000);
-      const endTime = startTime + Number(duration);
+      const endTime = startTime + (Number(duration) * 86400); // Convert days to seconds for timestamp
       
       const dbPayload = {
         address: takeoverPDA.toString(),
