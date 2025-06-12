@@ -67,7 +67,7 @@ function createInitializeBillionScaleInstruction(
 
 export default function CreatePage() {
   const { connection } = useConnection();
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
   const { toast } = useToast();
   
   const [loading, setLoading] = useState(false);
@@ -188,18 +188,21 @@ export default function CreatePage() {
       
       console.log("9. Transaction built and signed by vault");
       
-      // Send transaction (wallet will sign automatically)
-      console.log("10. Sending billion-scale transaction...");
-      const signature = await sendTransaction(transaction, connection, {
+      // Sign with wallet and send raw transaction
+      console.log("10. Signing with wallet...");
+      const signedTransaction = await signTransaction!(transaction);
+      
+      console.log("11. Sending raw transaction...");
+      const signature = await connection.sendRawTransaction(signedTransaction.serialize(), {
         skipPreflight: true,
         preflightCommitment: "confirmed",
         maxRetries: 3
       });
       
-      console.log("11. Transaction sent, signature:", signature);
+      console.log("12. Transaction sent, signature:", signature);
       
       // Confirm transaction with more robust method
-      console.log("12. Confirming transaction...");
+      console.log("13. Confirming transaction...");
       const { blockhash: confirmBlockhash, lastValidBlockHeight } = await connection.getLatestBlockhash("confirmed");
       const confirmation = await connection.confirmTransaction({
         signature,
@@ -211,10 +214,10 @@ export default function CreatePage() {
         throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
       }
       
-      console.log("13. ✅ Billion-scale takeover created successfully!");
+      console.log("14. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("14. Saving to database...");
+      console.log("15. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -244,7 +247,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("15. ✅ Saved to database successfully");
+        console.log("16. ✅ Saved to database successfully");
       }
       
       toast({
