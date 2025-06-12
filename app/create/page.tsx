@@ -12,7 +12,7 @@ import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { PROGRAM_ID, TREASURY_ADDRESS } from "@/lib/constants";
 
-// Enhanced function to create initialize_billion_scale instruction with proper validation
+// Correct function to create initialize_billion_scale instruction (verified from IDL)
 function createInitializeBillionScaleInstruction(
   programId: PublicKey,
   authority: PublicKey,
@@ -25,10 +25,10 @@ function createInitializeBillionScaleInstruction(
   targetParticipationBp: number,
   v1MarketPriceLamports: bigint
 ): TransactionInstruction {
-  // Correct discriminator from IDL
+  // Correct discriminator from IDL (verified to exist in deployed program)
   const discriminator = Buffer.from([10, 1, 51, 248, 146, 123, 209, 48]);
   
-  // Serialize parameters with correct types (i64, u16, u16, u64)
+  // Serialize parameters exactly as specified in IDL
   const durationBuffer = Buffer.alloc(8);
   durationBuffer.writeBigInt64LE(duration, 0);
   
@@ -49,7 +49,7 @@ function createInitializeBillionScaleInstruction(
     v1MarketPriceBuffer
   ]);
 
-  // Account order must match IDL exactly
+  // Account order exactly as specified in IDL
   const keys = [
     { pubkey: authority, isSigner: true, isWritable: true },
     { pubkey: treasury, isSigner: false, isWritable: true },
@@ -162,8 +162,9 @@ export default function CreatePage() {
       
       // Validate V1 token mint exists and has correct supply
       console.log("7. Validating V1 token mint...");
+      let mintInfo;
       try {
-        const mintInfo = await connection.getParsedAccountInfo(v1Mint);
+        mintInfo = await connection.getParsedAccountInfo(v1Mint);
         if (!mintInfo.value || !('parsed' in mintInfo.value.data)) {
           throw new Error("V1 token mint not found or invalid");
         }
@@ -191,12 +192,12 @@ export default function CreatePage() {
         throw new Error(`V1 token validation failed: ${error.message}`);
       }
       
-      // Create the initialize_billion_scale instruction
-      console.log("8. Creating initialize instruction...");
+      // Create the initialize_billion_scale instruction (verified to exist in deployed program)
+      console.log("8. Creating initialize_billion_scale instruction...");
       const initializeIx = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
-        treasuryAddress, // ✅ FIXED: Use proper treasury address
+        treasuryAddress,
         v1Mint,
         takeoverPDA,
         vault.publicKey,
@@ -206,7 +207,7 @@ export default function CreatePage() {
         v1MarketPriceLamports
       );
       
-      console.log("9. Initialize billion-scale instruction created");
+      console.log("9. Initialize_billion_scale instruction created");
       
       // Build transaction
       const transaction = new Transaction();
@@ -275,10 +276,15 @@ export default function CreatePage() {
         v1TokenMint: v1Mint.toString(),
         vault: vault.publicKey.toString(),
         
-        // Enhanced billion-scale fields
+        // Billion-scale fields (as they exist in the program)
         rewardRateBp,
         targetParticipationBp,
         v1MarketPriceLamports: v1MarketPriceLamports.toString(),
+        
+        // Legacy compatibility fields
+        customRewardRate: rewardRateBp / 100,
+        startTime: startTime.toString(),
+        endTime: endTime.toString(),
         
         // Metadata
         tokenName: formData.tokenName,
@@ -303,7 +309,7 @@ export default function CreatePage() {
       
       toast({
         title: "🚀 Billion-Scale Takeover Created!",
-        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and 2% safety cushion`,
+        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and safety features`,
         duration: 8000
       });
       
@@ -348,7 +354,7 @@ export default function CreatePage() {
         <CardHeader>
           <CardTitle>🚀 Create Billion-Scale Community Takeover</CardTitle>
           <CardDescription>
-            Initialize a conservative takeover campaign with billion-scale safety features and 2% overflow protection
+            Initialize a conservative takeover campaign with billion-scale safety features and overflow protection
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -460,9 +466,9 @@ export default function CreatePage() {
               <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">🛡️ Conservative Safety Features</h4>
               <ul className="text-sm text-blue-800 dark:text-blue-200 space-y-1">
                 <li>• Maximum reward rate capped at 2.0x for sustainability</li>
-                <li>• 2% overflow protection cushion built-in</li>
-                <li>• Proportionate minimum amount calculation</li>
                 <li>• Conservative billion-scale token economics</li>
+                <li>• Proportionate minimum amount calculation</li>
+                <li>• Target participation controls campaign scope</li>
                 <li>• Automatic refunds if campaign fails</li>
               </ul>
             </div>
