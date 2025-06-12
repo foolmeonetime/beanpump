@@ -177,25 +177,31 @@ export default function CreatePage() {
       const transaction = new Transaction();
       transaction.add(initializeIx);
       
+      // Get recent blockhash and set fee payer
+      console.log("8. Getting recent blockhash...");
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
+      transaction.feePayer = publicKey;
+      
       // Sign transaction with vault keypair
       transaction.partialSign(vault);
       
-      console.log("8. Transaction built and signed by vault");
+      console.log("9. Transaction built and signed by vault");
       
       // Send transaction
-      console.log("9. Sending billion-scale transaction...");
+      console.log("10. Sending billion-scale transaction...");
       const signature = await sendTransaction(transaction, connection);
       
-      console.log("10. Transaction sent, signature:", signature);
+      console.log("11. Transaction sent, signature:", signature);
       
       // Confirm transaction
-      console.log("11. Confirming transaction...");
+      console.log("12. Confirming transaction...");
       await connection.confirmTransaction(signature, "confirmed");
       
-      console.log("12. ✅ Billion-scale takeover created successfully!");
+      console.log("13. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("13. Saving to database...");
+      console.log("14. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -225,7 +231,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("14. ✅ Saved to database successfully");
+        console.log("15. ✅ Saved to database successfully");
       }
       
       toast({
