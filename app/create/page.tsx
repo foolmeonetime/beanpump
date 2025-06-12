@@ -198,14 +198,42 @@ export default function CreatePage() {
       
       console.log("11. Transaction sent, signature:", signature);
       
-      // Confirm transaction
+      // Confirm transaction with better error handling
       console.log("12. Confirming transaction...");
-      await connection.confirmTransaction(signature, "confirmed");
+      try {
+        const confirmation = await connection.confirmTransaction(signature, "confirmed");
+        
+        if (confirmation.value.err) {
+          console.error("Transaction failed on-chain:", confirmation.value.err);
+          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
+        }
+        
+        console.log("13. ✅ Transaction confirmed successfully!");
+      } catch (confirmError: any) {
+        console.error("Confirmation error:", confirmError);
+        
+        // Try to get transaction details for debugging
+        try {
+          const txDetails = await connection.getTransaction(signature, {
+            commitment: "confirmed",
+            maxSupportedTransactionVersion: 0
+          });
+          console.error("Transaction details:", txDetails);
+          
+          if (txDetails?.meta?.err) {
+            throw new Error(`On-chain error: ${JSON.stringify(txDetails.meta.err)}`);
+          }
+        } catch (detailError) {
+          console.error("Could not fetch transaction details:", detailError);
+        }
+        
+        throw confirmError;
+      }
       
-      console.log("13. ✅ Billion-scale takeover created successfully!");
+      console.log("14. ✅ Billion-scale takeover created successfully!");
       
       // Save to database
-      console.log("14. Saving to database...");
+      console.log("15. Saving to database...");
       const dbPayload = {
         address: takeoverPDA.toString(),
         authority: publicKey.toString(),
@@ -235,7 +263,7 @@ export default function CreatePage() {
       if (!dbResponse.ok) {
         console.warn("Database save failed, but takeover was created on-chain");
       } else {
-        console.log("15. ✅ Saved to database successfully");
+        console.log("16. ✅ Saved to database successfully");
       }
       
       toast({
