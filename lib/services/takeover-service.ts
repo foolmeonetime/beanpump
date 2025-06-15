@@ -58,154 +58,170 @@ export class TakeoverService {
    * Create a new takeover with comprehensive logging and validation
    */
   static async createTakeover(db: PoolClient, data: CreateTakeoverData) {
-    console.log('🔧 TakeoverService.createTakeover called');
-    console.log('📝 Input data keys:', Object.keys(data));
+  console.log('🔧 TakeoverService.createTakeover called');
+  console.log('📝 Input data keys:', Object.keys(data));
+  
+  try {
+    // First, check what columns actually exist in the database
+    console.log('🔍 Checking available database columns...');
+    const schemaResult = await db.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'takeovers' AND table_schema = 'public'
+    `);
     
-    try {
-      // Handle duration conversion to start/end times
-      let startTime = data.startTime || data.start_time;
-      let endTime = data.endTime || data.end_time;
-      
-      // If duration is provided instead of start/end times, calculate them
-      if (data.duration && (!startTime || !endTime)) {
-        const now = Math.floor(Date.now() / 1000);
-        startTime = now.toString();
-        endTime = (now + (data.duration * 24 * 60 * 60)).toString(); // duration in days
-        console.log(`⏰ Converted duration ${data.duration} days to start/end times:`, {
-          startTime,
-          endTime,
-          durationSeconds: data.duration * 24 * 60 * 60
-        });
-      }
-      
-      // Handle both camelCase and snake_case field names for backward compatibility
-      const safeValues = {
-        address: data.address,
-        authority: data.authority,
-        v1_token_mint: data.v1TokenMint || data.v1_token_mint || '',
-        vault: data.vault,
-        min_amount: data.minAmount || data.min_amount || '1000000',
-        start_time: startTime || Math.floor(Date.now() / 1000).toString(),
-        end_time: endTime || (Math.floor(Date.now() / 1000) + 604800).toString(),
-        custom_reward_rate: data.customRewardRate || data.custom_reward_rate || 1.5,
-        reward_rate_bp: data.rewardRateBp || data.reward_rate_bp || Math.round((data.customRewardRate || data.custom_reward_rate || 1.5) * 100),
-        target_participation_bp: data.targetParticipationBp || data.target_participation_bp || 1000,
-        v1_market_price_lamports: data.v1MarketPriceLamports || data.v1_market_price_lamports || '1000000',
-        calculated_min_amount: data.calculatedMinAmount || data.calculated_min_amount || data.minAmount || data.min_amount || '1000000',
-        max_safe_total_contribution: data.maxSafeTotalContribution || data.max_safe_total_contribution || '100000000',
-        token_name: data.tokenName || data.token_name || '',
-        image_url: data.imageUrl || data.image_url || '',
-        signature: data.signature || '',
-        created_at: new Date().toISOString(),
-        total_contributed: '0',
-        contributor_count: 0,
-        is_finalized: false,
-        is_successful: false,
-      };
+    const availableColumns = schemaResult.rows.map(row => row.column_name);
+    console.log('✅ Available columns:', availableColumns);
+    
+    // Handle duration conversion to start/end times
+    let startTime = data.startTime || data.start_time;
+    let endTime = data.endTime || data.end_time;
+    
+    // If duration is provided instead of start/end times, calculate them
+    if (data.duration && (!startTime || !endTime)) {
+      const now = Math.floor(Date.now() / 1000);
+      startTime = now.toString();
+      endTime = (now + (data.duration * 24 * 60 * 60)).toString(); // duration in days
+      console.log(`⏰ Converted duration ${data.duration} days to start/end times:`, {
+        startTime,
+        endTime,
+        durationSeconds: data.duration * 24 * 60 * 60
+      });
+    }
+    
+    // Prepare the full data object with all possible fields
+    const fullData = {
+      address: data.address,
+      authority: data.authority,
+      v1_token_mint: data.v1TokenMint || data.v1_token_mint || '',
+      vault: data.vault,
+      min_amount: data.minAmount || data.min_amount || '1000000',
+      start_time: startTime || Math.floor(Date.now() / 1000).toString(),
+      end_time: endTime || (Math.floor(Date.now() / 1000) + 604800).toString(),
+      custom_reward_rate: data.customRewardRate || data.custom_reward_rate || 1.5,
+      reward_rate_bp: data.rewardRateBp || data.reward_rate_bp || Math.round((data.customRewardRate || data.custom_reward_rate || 1.5) * 100),
+      target_participation_bp: data.targetParticipationBp || data.target_participation_bp || 1000,
+      v1_market_price_lamports: data.v1MarketPriceLamports || data.v1_market_price_lamports || '1000000',
+      calculated_min_amount: data.calculatedMinAmount || data.calculated_min_amount || data.minAmount || data.min_amount || '1000000',
+      max_safe_total_contribution: data.maxSafeTotalContribution || data.max_safe_total_contribution || '100000000',
+      token_name: data.tokenName || data.token_name || '',
+      image_url: data.imageUrl || data.image_url || '',
+      signature: data.signature || '',
+      created_at: new Date().toISOString(),
+      total_contributed: '0',
+      contributor_count: 0,
+      is_finalized: false,
+      is_successful: false,
+    };
 
-      console.log('✅ Processed safe values:', {
+    // Build dynamic insert query based on available columns
+    const safeValues: any = {};
+    const insertColumns: string[] = [];
+    const placeholders: string[] = [];
+    let paramIndex = 1;
+
+    // Only include columns that actually exist in the database
+    for (const [key, value] of Object.entries(fullData)) {
+      if (availableColumns.includes(key)) {
+        safeValues[key] = value;
+        insertColumns.push(key);
+        placeholders.push(`$${paramIndex}`);
+        paramIndex++;
+      } else {
+        console.log(`⚠️ Skipping column '${key}' - not found in database`);
+      }
+    }
+
+    console.log('✅ Filtered safe values for existing columns:', {
+      columnCount: insertColumns.length,
+      columns: insertColumns,
+      sampleValues: {
         address: safeValues.address,
         authority: safeValues.authority,
         token_name: safeValues.token_name,
-        reward_rate_bp: safeValues.reward_rate_bp,
-        min_amount: safeValues.min_amount,
         start_time: safeValues.start_time,
-        end_time: safeValues.end_time,
-        created_at: safeValues.created_at
-      });
+        end_time: safeValues.end_time
+      }
+    });
 
-      const insertQuery = `
-        INSERT INTO takeovers (
-          address, authority, v1_token_mint, vault, min_amount, 
-          start_time, end_time, custom_reward_rate, reward_rate_bp,
-          target_participation_bp, v1_market_price_lamports,
-          calculated_min_amount, max_safe_total_contribution,
-          token_name, image_url, signature, created_at,
-          total_contributed, contributor_count, is_finalized, is_successful
-        ) VALUES (
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
-        )
-        RETURNING *
-      `;
+    // Build the dynamic insert query
+    const insertQuery = `
+      INSERT INTO takeovers (${insertColumns.join(', ')})
+      VALUES (${placeholders.join(', ')})
+      RETURNING *
+    `;
 
-      const values = Object.values(safeValues);
-      
-      console.log('📊 Prepared query parameters:');
-      console.log('Parameter count:', values.length);
-      console.log('Key values:', {
-        address: values[0],
-        authority: values[1],
-        token_name: values[13],
-        start_time: values[5],
-        end_time: values[6]
-      });
-      
-      console.log('🔄 Executing database insert...');
-      const queryStart = Date.now();
-      
-      const result = await db.query(insertQuery, values);
-      
-      const queryEnd = Date.now();
-      console.log(`✅ Database insert completed in ${queryEnd - queryStart}ms`);
-      
-      if (!result.rows || result.rows.length === 0) {
-        console.error('❌ No rows returned from insert query');
-        throw new ApiError('Insert query returned no rows', 'NO_ROWS_RETURNED');
-      }
-      
-      const insertedRow = result.rows[0];
-      console.log('🎉 Successfully inserted takeover:');
-      console.log('- ID:', insertedRow.id);
-      console.log('- Address:', insertedRow.address);
-      console.log('- Token Name:', insertedRow.token_name);
-      console.log('- Start Time:', insertedRow.start_time);
-      console.log('- End Time:', insertedRow.end_time);
-      console.log('- Created At:', insertedRow.created_at);
-      console.log('- Total Contributed:', insertedRow.total_contributed);
-      console.log('- Is Finalized:', insertedRow.is_finalized);
-      
-      // Additional verification query
-      console.log('🔍 Performing verification query...');
-      const verifyResult = await db.query(
-        'SELECT COUNT(*) as count FROM takeovers WHERE address = $1',
-        [safeValues.address]
-      );
-      
-      const count = parseInt(verifyResult.rows[0].count);
-      console.log(`✅ Verification complete: ${count} takeover(s) found with address ${safeValues.address}`);
-      
-      if (count === 0) {
-        console.error('❌ VERIFICATION FAILED: Takeover not found after insertion');
-        throw new ApiError('Takeover verification failed after insertion', 'VERIFICATION_FAILED');
-      }
-      
-      return insertedRow;
-      
-    } catch (error: any) {
-      console.error('💥 TakeoverService.createTakeover failed:');
-      console.error('Error code:', error.code);
-      console.error('Error message:', error.message);
-      console.error('Error details:', error.detail);
-      
-      if (error.code === '23505') { // Unique constraint violation
-        console.error('🔄 Duplicate takeover detected');
-        throw new ApiError('Takeover already exists', 'DUPLICATE_TAKEOVER', 409);
-      }
-      
-      if (error.code === '42703') { // Undefined column
-        console.error('❌ Database schema mismatch - column does not exist');
-        throw new ApiError('Database schema error: column does not exist', 'SCHEMA_ERROR');
-      }
-      
-      if (error.code === '42601') { // Syntax error
-        console.error('❌ SQL syntax error in query');
-        throw new ApiError('Database query syntax error', 'SYNTAX_ERROR');
-      }
-      
-      console.error('❌ Generic database error occurred');
-      throw new ApiError(`Failed to create takeover: ${error.message}`, 'DATABASE_ERROR');
+    const values = insertColumns.map(col => safeValues[col]);
+    
+    console.log('📊 Prepared dynamic query:');
+    console.log('Columns:', insertColumns.length);
+    console.log('Values:', values.length);
+    console.log('Sample query:', insertQuery.replace(/\s+/g, ' ').trim());
+    
+    console.log('🔄 Executing database insert...');
+    const queryStart = Date.now();
+    
+    const result = await db.query(insertQuery, values);
+    
+    const queryEnd = Date.now();
+    console.log(`✅ Database insert completed in ${queryEnd - queryStart}ms`);
+    
+    if (!result.rows || result.rows.length === 0) {
+      console.error('❌ No rows returned from insert query');
+      throw new ApiError('Insert query returned no rows', 'NO_ROWS_RETURNED');
     }
+    
+    const insertedRow = result.rows[0];
+    console.log('🎉 Successfully inserted takeover:');
+    console.log('- ID:', insertedRow.id);
+    console.log('- Address:', insertedRow.address);
+    console.log('- Token Name:', insertedRow.token_name || 'N/A');
+    console.log('- Created At:', insertedRow.created_at || 'N/A');
+    console.log('- Total Contributed:', insertedRow.total_contributed || 'N/A');
+    console.log('- Is Finalized:', insertedRow.is_finalized || 'N/A');
+    
+    // Additional verification query
+    console.log('🔍 Performing verification query...');
+    const verifyResult = await db.query(
+      'SELECT COUNT(*) as count FROM takeovers WHERE address = $1',
+      [safeValues.address]
+    );
+    
+    const count = parseInt(verifyResult.rows[0].count);
+    console.log(`✅ Verification complete: ${count} takeover(s) found with address ${safeValues.address}`);
+    
+    if (count === 0) {
+      console.error('❌ VERIFICATION FAILED: Takeover not found after insertion');
+      throw new ApiError('Takeover verification failed after insertion', 'VERIFICATION_FAILED');
+    }
+    
+    return insertedRow;
+    
+  } catch (error: any) {
+    console.error('💥 TakeoverService.createTakeover failed:');
+    console.error('Error code:', error.code);
+    console.error('Error message:', error.message);
+    console.error('Error details:', error.detail);
+    
+    if (error.code === '23505') { // Unique constraint violation
+      console.error('🔄 Duplicate takeover detected');
+      throw new ApiError('Takeover already exists', 'DUPLICATE_TAKEOVER', 409);
+    }
+    
+    if (error.code === '42703') { // Undefined column
+      console.error('❌ Database schema mismatch - column does not exist');
+      throw new ApiError('Database schema error: column does not exist', 'SCHEMA_ERROR');
+    }
+    
+    if (error.code === '42601') { // Syntax error
+      console.error('❌ SQL syntax error in query');
+      throw new ApiError('Database query syntax error', 'SYNTAX_ERROR');
+    }
+    
+    console.error('❌ Generic database error occurred');
+    throw new ApiError(`Failed to create takeover: ${error.message}`, 'DATABASE_ERROR');
   }
+}
 
   /**
    * Get multiple takeovers with filtering and pagination
