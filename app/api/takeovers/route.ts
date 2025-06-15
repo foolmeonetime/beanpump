@@ -1,4 +1,4 @@
-// app/api/takeovers/route.ts - Enhanced with proper logging
+// app/api/takeovers/route.ts - Enhanced with proper logging and address filtering
 import { createApiRoute } from '@/lib/middleware/compose';
 import { GetTakeoversQuerySchema, CreateTakeoverSchema } from '@/lib/schemas/takeover';
 import { TakeoverService } from '@/lib/services/takeover-service';
@@ -9,25 +9,74 @@ export const GET = createApiRoute(
   async ({ db, searchParams }) => {
     const filters = {
       authority: searchParams?.get('authority') || undefined,
+      address: searchParams?.get('address') || undefined, // Add address filter
       status: searchParams?.get('status') || undefined,
       limit: searchParams?.get('limit') ? Number(searchParams.get('limit')) : undefined,
       offset: searchParams?.get('offset') ? Number(searchParams.get('offset')) : undefined,
     };
 
     console.log('📊 Fetching takeovers with filters:', filters);
-    const rawTakeovers = await TakeoverService.getTakeovers(db, filters);
     
-    // Process takeovers with safe calculations
-    const processedTakeovers = rawTakeovers.map(processTakeoverCalculations);
-    console.log(`✅ Successfully fetched ${processedTakeovers.length} takeovers`);
+    try {
+      // If a specific address is requested, use the specialized method
+      if (filters.address) {
+        console.log('🔍 Fetching specific takeover by address:', filters.address);
+        
+        try {
+          const singleTakeover = await TakeoverService.getTakeoverByAddress(db, filters.address);
+          const processedTakeover = processTakeoverCalculations(singleTakeover);
+          
+          console.log('✅ Successfully fetched single takeover');
+          return {
+            success: true,
+            data: {
+              takeovers: [processedTakeover],
+              count: 1,
+            },
+          };
+        } catch (error: any) {
+          console.error('❌ Error fetching single takeover:', error.message);
+          
+          // If specific takeover not found, fall back to general query
+          if (error.message.includes('not found')) {
+            console.log('🔄 Takeover not found by address, falling back to general query');
+          } else {
+            throw error; // Re-throw if it's a different error
+          }
+        }
+      }
+      
+      // General query for multiple takeovers
+      const rawTakeovers = await TakeoverService.getTakeovers(db, filters);
+      
+      // Process takeovers with safe calculations
+      const processedTakeovers = rawTakeovers.map(processTakeoverCalculations);
+      console.log(`✅ Successfully fetched ${processedTakeovers.length} takeovers`);
 
-    return {
-      success: true,
-      data: {
-        takeovers: processedTakeovers,
-        count: processedTakeovers.length,
-      },
-    };
+      return {
+        success: true,
+        data: {
+          takeovers: processedTakeovers,
+          count: processedTakeovers.length,
+        },
+      };
+      
+    } catch (error: any) {
+      console.error('💥 Error in GET /api/takeovers:', error);
+      
+      // Return a structured error response
+      return {
+        success: false,
+        error: {
+          message: error.message || 'Failed to fetch takeovers',
+          code: error.code || 'UNKNOWN_ERROR',
+        },
+        data: {
+          takeovers: [],
+          count: 0,
+        },
+      };
+    }
   },
   {
     validateQuery: GetTakeoversQuerySchema,
@@ -48,7 +97,13 @@ export const POST = createApiRoute(
       
       if (missingFields.length > 0) {
         console.error('❌ Missing required fields:', missingFields);
-        throw new Error(`Missing required fields: ${missingFields.join(', ')}`);
+        return {
+          success: false,
+          error: {
+            message: `Missing required fields: ${missingFields.join(', ')}`,
+            code: 'VALIDATION_ERROR',
+          },
+        };
       }
       
       console.log('✅ All required fields present');
@@ -67,85 +122,150 @@ export const POST = createApiRoute(
       
       if (existingCheck.rows.length > 0) {
         console.warn('⚠️ Takeover already exists with address:', body.address);
-        throw new Error('Takeover with this address already exists');
+        return {
+          success: false,
+          error: {
+            message: 'Takeover with this address already exists',
+            code: 'DUPLICATE_ADDRESS',
+          },
+        };
       }
       
       console.log('✅ No existing takeover found, proceeding with creation');
       
-      // Create the takeover with detailed logging
-      console.log('🚀 Creating takeover in database...');
-      const startTime = Date.now();
+      // Create the takeover using the service
+      const newTakeover = await TakeoverService.createTakeover(db, body);
+      const processedTakeover = processTakeoverCalculations(newTakeover);
       
-      const takeover = await TakeoverService.createTakeover(db, body);
-      
-      const endTime = Date.now();
-      console.log(`✅ Takeover created successfully in ${endTime - startTime}ms`);
-      console.log('📋 Created takeover:', {
-        id: takeover.id,
-        address: takeover.address,
-        authority: takeover.authority,
-        tokenName: takeover.token_name,
-        createdAt: takeover.created_at
+      console.log('🎉 Takeover created successfully:', {
+        id: processedTakeover.id,
+        address: processedTakeover.address,
+        tokenName: processedTakeover.tokenName,
       });
-      
-      // Verify the insertion by querying back
-      console.log('🔍 Verifying takeover was saved...');
-      const verificationQuery = await db.query(
-        'SELECT id, address, token_name, created_at FROM takeovers WHERE address = $1',
-        [body.address]
-      );
-      
-      if (verificationQuery.rows.length === 0) {
-        console.error('❌ CRITICAL: Takeover not found after creation!');
-        throw new Error('Takeover creation failed - not found in database after insertion');
-      }
-      
-      const verified = verificationQuery.rows[0];
-      console.log('✅ Takeover verified in database:', {
-        id: verified.id,
-        address: verified.address,
-        tokenName: verified.token_name,
-        createdAt: verified.created_at
-      });
-      
-      // Log successful completion
-      console.log('🎉 Takeover creation process completed successfully');
-      
+
       return {
         success: true,
-        data: { 
-          takeover,
-          verification: {
-            created: true,
-            verified: true,
-            timestamp: new Date().toISOString()
-          }
+        data: {
+          takeover: processedTakeover,
         },
       };
       
     } catch (error: any) {
-      console.error('💥 Takeover creation failed:');
-      console.error('Error message:', error.message);
-      console.error('Error stack:', error.stack);
-      console.error('Request body that failed:', JSON.stringify(body, null, 2));
+      console.error('💥 Error creating takeover:', error);
+      console.error('Stack trace:', error.stack);
       
-      // Log database state for debugging
-      try {
-        const dbState = await db.query(`
-          SELECT COUNT(*) as total_takeovers,
-                 MAX(created_at) as latest_created
-          FROM takeovers
-        `);
-        console.log('📊 Current database state:', dbState.rows[0]);
-      } catch (dbError) {
-        console.error('❌ Could not query database state:', dbError);
-      }
-      
-      // Re-throw the error to be handled by middleware
-      throw error;
+      return {
+        success: false,
+        error: {
+          message: error.message || 'Failed to create takeover',
+          code: error.code || 'CREATION_ERROR',
+        },
+      };
     }
   },
   {
     validateBody: CreateTakeoverSchema,
+  }
+);
+
+// PUT /api/takeovers - Update takeover data
+export const PUT = createApiRoute(
+  async ({ db, body }) => {
+    console.log('🔄 Starting takeover update process...');
+    console.log('📝 Update body:', JSON.stringify(body, null, 2));
+    
+    try {
+      const { address, ...updateData } = body;
+      
+      if (!address) {
+        return {
+          success: false,
+          error: {
+            message: 'Takeover address is required for updates',
+            code: 'VALIDATION_ERROR',
+          },
+        };
+      }
+      
+      // Check if takeover exists
+      const existingTakeover = await TakeoverService.getTakeoverByAddress(db, address);
+      console.log('✅ Found existing takeover for update:', existingTakeover.id);
+      
+      // Update the takeover
+      const updatedTakeover = await TakeoverService.updateTakeover(db, address, updateData);
+      const processedTakeover = processTakeoverCalculations(updatedTakeover);
+      
+      console.log('✅ Takeover updated successfully:', {
+        id: processedTakeover.id,
+        address: processedTakeover.address,
+      });
+
+      return {
+        success: true,
+        data: {
+          takeover: processedTakeover,
+        },
+      };
+      
+    } catch (error: any) {
+      console.error('💥 Error updating takeover:', error);
+      
+      return {
+        success: false,
+        error: {
+          message: error.message || 'Failed to update takeover',
+          code: error.code || 'UPDATE_ERROR',
+        },
+      };
+    }
+  }
+);
+
+// DELETE /api/takeovers - Delete takeover (admin only)
+export const DELETE = createApiRoute(
+  async ({ db, searchParams }) => {
+    const address = searchParams?.get('address');
+    
+    if (!address) {
+      return {
+        success: false,
+        error: {
+          message: 'Takeover address is required for deletion',
+          code: 'VALIDATION_ERROR',
+        },
+      };
+    }
+    
+    console.log('🗑️ Starting takeover deletion process for:', address);
+    
+    try {
+      // Check if takeover exists
+      const existingTakeover = await TakeoverService.getTakeoverByAddress(db, address);
+      console.log('✅ Found takeover for deletion:', existingTakeover.id);
+      
+      // Delete the takeover
+      await db.query('DELETE FROM takeovers WHERE address = $1', [address]);
+      
+      console.log('✅ Takeover deleted successfully:', address);
+
+      return {
+        success: true,
+        data: {
+          message: 'Takeover deleted successfully',
+          deletedAddress: address,
+        },
+      };
+      
+    } catch (error: any) {
+      console.error('💥 Error deleting takeover:', error);
+      
+      return {
+        success: false,
+        error: {
+          message: error.message || 'Failed to delete takeover',
+          code: error.code || 'DELETION_ERROR',
+        },
+      };
+    }
   }
 );
