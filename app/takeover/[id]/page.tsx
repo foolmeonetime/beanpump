@@ -190,7 +190,7 @@ export default function Page() {
     
     console.log("Fetching takeover details for address:", takeoverAddress);
     
-    const response = await fetch('/api/takeovers');
+    const response = await fetch(`/api/takeovers?address=${takeoverAddress}`);
     if (!response.ok) {
       throw new Error(`API request failed: ${response.status} ${response.statusText}`);
     }
