@@ -1,4 +1,4 @@
-// lib/services/takeover-service.ts - Complete TakeoverService with enhanced logging
+// lib/services/takeover-service.ts - Complete TakeoverService with all methods
 import { PoolClient } from 'pg';
 import { ApiError, NotFoundError } from '../middleware/error-handler';
 
@@ -10,7 +10,7 @@ export interface CreateTakeoverData {
   vault: string;
   minAmount?: string;
   min_amount?: string;
-  duration?: number;
+  duration?: number; // Duration in days
   startTime?: string;
   start_time?: string;
   endTime?: string;
@@ -62,6 +62,22 @@ export class TakeoverService {
     console.log('📝 Input data keys:', Object.keys(data));
     
     try {
+      // Handle duration conversion to start/end times
+      let startTime = data.startTime || data.start_time;
+      let endTime = data.endTime || data.end_time;
+      
+      // If duration is provided instead of start/end times, calculate them
+      if (data.duration && (!startTime || !endTime)) {
+        const now = Math.floor(Date.now() / 1000);
+        startTime = now.toString();
+        endTime = (now + (data.duration * 24 * 60 * 60)).toString(); // duration in days
+        console.log(`⏰ Converted duration ${data.duration} days to start/end times:`, {
+          startTime,
+          endTime,
+          durationSeconds: data.duration * 24 * 60 * 60
+        });
+      }
+      
       // Handle both camelCase and snake_case field names for backward compatibility
       const safeValues = {
         address: data.address,
@@ -69,8 +85,8 @@ export class TakeoverService {
         v1_token_mint: data.v1TokenMint || data.v1_token_mint || '',
         vault: data.vault,
         min_amount: data.minAmount || data.min_amount || '1000000',
-        start_time: data.startTime || data.start_time || Math.floor(Date.now() / 1000).toString(),
-        end_time: data.endTime || data.end_time || (Math.floor(Date.now() / 1000) + (data.duration ? data.duration * 24 * 60 * 60 : 604800)).toString(),
+        start_time: startTime || Math.floor(Date.now() / 1000).toString(),
+        end_time: endTime || (Math.floor(Date.now() / 1000) + 604800).toString(),
         custom_reward_rate: data.customRewardRate || data.custom_reward_rate || 1.5,
         reward_rate_bp: data.rewardRateBp || data.reward_rate_bp || Math.round((data.customRewardRate || data.custom_reward_rate || 1.5) * 100),
         target_participation_bp: data.targetParticipationBp || data.target_participation_bp || 1000,
@@ -93,6 +109,8 @@ export class TakeoverService {
         token_name: safeValues.token_name,
         reward_rate_bp: safeValues.reward_rate_bp,
         min_amount: safeValues.min_amount,
+        start_time: safeValues.start_time,
+        end_time: safeValues.end_time,
         created_at: safeValues.created_at
       });
 
@@ -114,7 +132,13 @@ export class TakeoverService {
       
       console.log('📊 Prepared query parameters:');
       console.log('Parameter count:', values.length);
-      console.log('First few values:', values.slice(0, 5));
+      console.log('Key values:', {
+        address: values[0],
+        authority: values[1],
+        token_name: values[13],
+        start_time: values[5],
+        end_time: values[6]
+      });
       
       console.log('🔄 Executing database insert...');
       const queryStart = Date.now();
@@ -134,6 +158,8 @@ export class TakeoverService {
       console.log('- ID:', insertedRow.id);
       console.log('- Address:', insertedRow.address);
       console.log('- Token Name:', insertedRow.token_name);
+      console.log('- Start Time:', insertedRow.start_time);
+      console.log('- End Time:', insertedRow.end_time);
       console.log('- Created At:', insertedRow.created_at);
       console.log('- Total Contributed:', insertedRow.total_contributed);
       console.log('- Is Finalized:', insertedRow.is_finalized);

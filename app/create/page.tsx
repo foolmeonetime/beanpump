@@ -271,45 +271,80 @@ export default function CreatePage() {
       
       console.log("🎉 Billion-scale takeover created successfully!");
       
-      // Store in database
+      // Store in database with proper error handling
       try {
         console.log("💾 Storing takeover in database...");
+        
+        // Calculate startTime and endTime from duration
+        const startTime = Math.floor(Date.now() / 1000);
+        const endTime = startTime + (Number(duration) * 24 * 60 * 60); // duration in days
+        
+        // Prepare payload with proper field mapping
+        const payload = {
+          address: takeoverPDA.toString(),
+          authority: publicKey.toString(),
+          v1TokenMint: v1Mint.toString(),
+          vault: vault.publicKey.toString(),
+          startTime: startTime.toString(), // ✅ Convert to string
+          endTime: endTime.toString(),     // ✅ Convert to string
+          rewardRateBp: Number(rewardRateBp), // ✅ Ensure it's a number
+          targetParticipationBp: Number(targetParticipationBp), // ✅ Ensure it's a number
+          v1MarketPriceLamports: v1MarketPriceLamports.toString(), // ✅ Convert to string
+          tokenName: formData.tokenName || '', // ✅ Ensure it's not undefined
+          imageUrl: formData.imageUrl && formData.imageUrl.trim() ? formData.imageUrl : undefined, // ✅ Only send if valid URL
+          signature: signature || ''
+        };
+        
+        console.log("📝 Database payload:", JSON.stringify(payload, null, 2));
         
         const dbResponse = await fetch('/api/takeovers', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            address: takeoverPDA.toString(),
-            authority: publicKey.toString(),
-            v1TokenMint: v1Mint.toString(),
-            vault: vault.publicKey.toString(),
-            duration: Number(duration),
-            rewardRateBp,
-            targetParticipationBp,
-            v1MarketPriceLamports: v1MarketPriceLamports,
-            tokenName: formData.tokenName,
-            imageUrl: formData.imageUrl,
-            signature: signature
-          })
+          body: JSON.stringify(payload)
         });
         
+        console.log("📊 Database response status:", dbResponse.status);
+        
         if (!dbResponse.ok) {
-          console.warn("⚠️ Database storage failed, but takeover was created on-chain");
+          // Get detailed error information
+          const errorText = await dbResponse.text();
+          console.error("❌ Database storage failed:", errorText);
+          
+          let errorDetails;
+          try {
+            errorDetails = JSON.parse(errorText);
+          } catch {
+            errorDetails = { message: errorText };
+          }
+          
+          toast({
+            title: "⚠️ Database Storage Failed",
+            description: `Takeover created on-chain but database error: ${errorDetails.error?.message || errorDetails.message || 'Unknown error'}`,
+            variant: "destructive",
+            duration: 10000
+          });
         } else {
-          console.log("✅ Takeover stored in database");
+          const successResponse = await dbResponse.json();
+          console.log("✅ Database response:", successResponse);
+          
+          toast({
+            title: "✅ Complete Success!",
+            description: "Takeover created on-chain and stored in database successfully",
+            duration: 6000
+          });
         }
         
-      } catch (dbError) {
-        console.warn("⚠️ Database error (takeover still created):", dbError);
+      } catch (dbError: any) {
+        console.error("💥 Database request failed:", dbError);
+        toast({
+          title: "⚠️ Database Connection Failed",
+          description: `Takeover created on-chain but database connection failed: ${dbError.message}`,
+          variant: "destructive",
+          duration: 10000
+        });
       }
       
-      toast({
-        title: "🎉 Billion-Scale Takeover Created!",
-        description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and billion-scale safety features`,
-        duration: 8000
-      });
-      
-      // Reset form
+      // Reset form on success
       setFormData({
         v1TokenMint: "",
         duration: "7",
@@ -321,6 +356,7 @@ export default function CreatePage() {
       });
       
     } catch (error: any) {
+      // Main error handler for the entire process
       console.error("💥 Billion-scale creation failed:");
       console.error("Error message:", error.message);
       
@@ -330,6 +366,7 @@ export default function CreatePage() {
         variant: "destructive"
       });
     } finally {
+      // Always reset loading state
       setLoading(false);
     }
   };
