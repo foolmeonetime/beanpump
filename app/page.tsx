@@ -1,110 +1,134 @@
-import { TakeoversList } from "@/components/takeovers-list"
-import { UserClaims } from "@/components/user-claims"
-import { ManualFinalize } from "@/components/manual-finalize"
-import { WalletMultiButton } from "@/components/wallet-multi-button"
-import { Button } from "@/components/ui/button"
-import Link from "next/link"
+import Link from 'next/link';
+import { TakeoversList } from '@/components/takeovers-list';
 
-export default function Home() {
+export default function HomePage() {
   return (
-    <div className="flex flex-col items-center justify-center space-y-8 py-8">
-      
-      <div className="text-center max-w-4xl mx-auto">
-        <h1 className="text-4xl font-bold tracking-tight mb-4">
-          🚀 Community Takeover Platform
+    <div className="space-y-8">
+      {/* Hero Section */}
+      <div className="text-center py-12 bg-white rounded-lg shadow-sm">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">
+          Welcome to Takeover System
         </h1>
-        <p className="text-lg text-gray-600 dark:text-gray-300 mb-4">
-          Decentralized token migration with enhanced safety features and manual finalization
+        <p className="text-xl text-gray-600 mb-8 max-w-2xl mx-auto">
+          A decentralized platform for Solana token takeovers, enabling community-driven 
+          token migrations with built-in safety mechanisms and transparent governance.
         </p>
-        <p className="text-sm text-gray-500 dark:text-gray-400 mb-8">
-          ✨ Enhanced with manual finalization, conservative reward rates, and overflow protection
-        </p>
-
-        <div className="flex justify-center mb-8 gap-4 flex-wrap">
-          <WalletMultiButton />
-          <Link href="/create">
-            <Button className="bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700">
-              🚀 Create Takeover
-            </Button>
-          </Link>
-          <Link href="/mint">
-            <Button variant="outline">
-              🪙 Mint Test Tokens
-            </Button>
-          </Link>
-        </div>
-
-        {/* Enhanced Features Showcase */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8 max-w-4xl mx-auto">
-          <Link href="/create">
-            <div className="p-6 border border-purple-200 rounded-lg hover:bg-purple-50 dark:hover:bg-purple-950 transition-colors cursor-pointer group">
-              <div className="text-3xl mb-3 group-hover:scale-110 transition-transform">🚀</div>
-              <h3 className="font-semibold mb-2 text-purple-800 dark:text-purple-200">Create Campaign</h3>
-              <p className="text-sm text-gray-600 dark:text-gray-400">
-                Launch secure takeover campaigns with built-in safety features
-              </p>
-            </div>
+        
+        <div className="flex flex-col sm:flex-row gap-4 justify-center">
+          <Link
+            href="/takeovers"
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+          >
+            View All Takeovers
           </Link>
           
-          <div className="p-6 border border-green-200 rounded-lg hover:bg-green-50 dark:hover:bg-green-950 transition-colors cursor-pointer group">
-            <div className="text-3xl mb-3 group-hover:scale-110 transition-transform">💰</div>
-            <h3 className="font-semibold mb-2 text-green-800 dark:text-green-200">Safe Contribute</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Contribute with overflow protection and safety mechanisms
+          <Link
+            href="/api/debug"
+            className="px-6 py-3 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors font-medium"
+          >
+            System Status
+          </Link>
+        </div>
+      </div>
+
+      {/* Quick Stats */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
+          <div className="text-3xl font-bold text-blue-600 mb-2">🚀</div>
+          <div className="text-sm text-gray-600">Active</div>
+          <div className="text-2xl font-bold text-gray-900">Takeovers</div>
+        </div>
+        
+        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
+          <div className="text-3xl font-bold text-green-600 mb-2">✅</div>
+          <div className="text-sm text-gray-600">Successful</div>
+          <div className="text-2xl font-bold text-gray-900">Migrations</div>
+        </div>
+        
+        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
+          <div className="text-3xl font-bold text-purple-600 mb-2">💎</div>
+          <div className="text-sm text-gray-600">Billion Scale</div>
+          <div className="text-2xl font-bold text-gray-900">Support</div>
+        </div>
+        
+        <div className="bg-white p-6 rounded-lg shadow-sm text-center">
+          <div className="text-3xl font-bold text-orange-600 mb-2">🔄</div>
+          <div className="text-sm text-gray-600">V2</div>
+          <div className="text-2xl font-bold text-gray-900">Migrations</div>
+        </div>
+      </div>
+
+      {/* Features Section */}
+      <div className="bg-white rounded-lg shadow-sm p-8">
+        <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+          Platform Features
+        </h2>
+        
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+          <div className="text-center">
+            <div className="text-4xl mb-4">🛡️</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Secure</h3>
+            <p className="text-gray-600 text-sm">
+              Built-in safety mechanisms and transparent on-chain execution
             </p>
           </div>
           
-          <div className="p-6 border border-blue-200 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-950 transition-colors cursor-pointer group">
-            <div className="text-3xl mb-3 group-hover:scale-110 transition-transform">🎁</div>
-            <h3 className="font-semibold mb-2 text-blue-800 dark:text-blue-200">Enhanced Rewards</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Claim V2 tokens with conservative reward rates
+          <div className="text-center">
+            <div className="text-4xl mb-4">⚡</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Fast</h3>
+            <p className="text-gray-600 text-sm">
+              Powered by Solana's high-performance blockchain
             </p>
           </div>
-
-          <div className="p-6 border border-orange-200 rounded-lg hover:bg-orange-50 dark:hover:bg-orange-950 transition-colors cursor-pointer group">
-            <div className="text-3xl mb-3 group-hover:scale-110 transition-transform">⚡</div>
-            <h3 className="font-semibold mb-2 text-orange-800 dark:text-orange-200">Manual Control</h3>
-            <p className="text-sm text-gray-600 dark:text-gray-400">
-              Manual finalization with creator control
+          
+          <div className="text-center">
+            <div className="text-4xl mb-4">🌐</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Decentralized</h3>
+            <p className="text-gray-600 text-sm">
+              Community-driven governance and transparent processes
             </p>
           </div>
-        </div>
-
-        {/* Safety Features */}
-        <div className="p-6 bg-gradient-to-r from-blue-50 to-purple-50 dark:from-blue-950 dark:to-purple-950 rounded-lg mb-8 max-w-4xl mx-auto">
-          <h2 className="text-xl font-bold mb-4 text-blue-800 dark:text-blue-200">
-            🛡️ Enhanced Safety Features
-          </h2>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-            <div className="text-center">
-              <div className="font-semibold text-blue-700 dark:text-blue-300">Manual Finalization</div>
-              <div className="text-gray-600 dark:text-gray-400">Creator-controlled completion</div>
-            </div>
-            <div className="text-center">
-              <div className="font-semibold text-purple-700 dark:text-purple-300">Overflow Protection</div>
-              <div className="text-gray-600 dark:text-gray-400">Built-in safety limits</div>
-            </div>
-            <div className="text-center">
-              <div className="font-semibold text-green-700 dark:text-green-300">Conservative Rates</div>
-              <div className="text-gray-600 dark:text-gray-400">Sustainable reward systems</div>
-            </div>
-            <div className="text-center">
-              <div className="font-semibold text-orange-700 dark:text-orange-300">Enhanced Security</div>
-              <div className="text-gray-600 dark:text-gray-400">Advanced safety checks</div>
-            </div>
+          
+          <div className="text-center">
+            <div className="text-4xl mb-4">📊</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Analytics</h3>
+            <p className="text-gray-600 text-sm">
+              Real-time tracking and comprehensive reporting
+            </p>
+          </div>
+          
+          <div className="text-center">
+            <div className="text-4xl mb-4">🔄</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Automated</h3>
+            <p className="text-gray-600 text-sm">
+              Automated token swaps and liquidity pool creation
+            </p>
+          </div>
+          
+          <div className="text-center">
+            <div className="text-4xl mb-4">💰</div>
+            <h3 className="text-lg font-semibold text-gray-900 mb-2">Rewarding</h3>
+            <p className="text-gray-600 text-sm">
+              Attractive reward mechanisms for participants
+            </p>
           </div>
         </div>
       </div>
 
-      {/* Manual finalization component */}
-      <ManualFinalize />
-
-      {/* User-specific claims section */}
-      <UserClaims />
-
-      {/* All takeovers list */}
-      <TakeoversList />
+      {/* Recent Takeovers */}
+      <div>
+        <div className="flex justify-between items-center mb-6">
+          <h2 className="text-2xl font-bold text-gray-900">Recent Takeovers</h2>
+          <Link
+            href="/takeovers"
+            className="text-blue-600 hover:text-blue-800 font-medium"
+          >
+            View All →
+          </Link>
+        </div>
+        
+        <TakeoversList />
+      </div>
     </div>
-  )
+  );
 }

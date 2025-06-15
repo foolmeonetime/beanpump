@@ -1,4 +1,4 @@
-// app/api/takeovers/route.ts - Enhanced with proper logging and address filtering
+// app/api/takeovers/route.ts - Complete API route for your bigint schema
 import { createApiRoute } from '@/lib/middleware/compose';
 import { GetTakeoversQuerySchema, CreateTakeoverSchema } from '@/lib/schemas/takeover';
 import { TakeoverService } from '@/lib/services/takeover-service';
@@ -9,7 +9,7 @@ export const GET = createApiRoute(
   async ({ db, searchParams }) => {
     const filters = {
       authority: searchParams?.get('authority') || undefined,
-      address: searchParams?.get('address') || undefined, // Add address filter
+      address: searchParams?.get('address') || undefined,
       status: searchParams?.get('status') || undefined,
       limit: searchParams?.get('limit') ? Number(searchParams.get('limit')) : undefined,
       offset: searchParams?.get('offset') ? Number(searchParams.get('offset')) : undefined,
@@ -83,7 +83,7 @@ export const GET = createApiRoute(
   }
 );
 
-// POST /api/takeovers - Enhanced with comprehensive logging
+// POST /api/takeovers
 export const POST = createApiRoute(
   async ({ db, body }) => {
     console.log('💾 Starting takeover creation process...');
@@ -92,7 +92,7 @@ export const POST = createApiRoute(
     try {
       // Pre-creation validation logging
       console.log('🔍 Validating required fields...');
-      const requiredFields = ['address', 'authority', 'v1TokenMint', 'vault'];
+      const requiredFields = ['address', 'authority', 'v1_token_mint', 'vault'];
       const missingFields = requiredFields.filter(field => !body[field]);
       
       if (missingFields.length > 0) {
@@ -168,7 +168,7 @@ export const POST = createApiRoute(
   }
 );
 
-// PUT /api/takeovers - Update takeover data
+// PUT /api/takeovers
 export const PUT = createApiRoute(
   async ({ db, body }) => {
     console.log('🔄 Starting takeover update process...');
@@ -221,7 +221,7 @@ export const PUT = createApiRoute(
   }
 );
 
-// DELETE /api/takeovers - Delete takeover (admin only)
+// DELETE /api/takeovers
 export const DELETE = createApiRoute(
   async ({ db, searchParams }) => {
     const address = searchParams?.get('address');

@@ -1,4 +1,4 @@
-// lib/schemas/takeover.ts
+// lib/schemas/takeover.ts - Updated schemas for your bigint database schema
 import { z } from 'zod';
 
 /**
@@ -13,9 +13,15 @@ const PositiveNumberStringSchema = z.string()
   .regex(/^\d+$/, 'Must be a positive number string')
   .refine(val => BigInt(val) > 0, 'Must be greater than 0');
 
-const TimestampStringSchema = z.string()
-  .regex(/^\d+$/, 'Must be a valid timestamp')
-  .optional();
+const TimestampSchema = z.union([
+  z.string().regex(/^\d+$/, 'Must be a valid timestamp string'),
+  z.number().int().positive('Must be a positive timestamp'),
+]).optional();
+
+const AmountSchema = z.union([
+  z.string().regex(/^\d+$/, 'Must be a valid amount string'),
+  z.number().int().min(0, 'Amount must be non-negative'),
+]).optional();
 
 /**
  * Schema for querying takeovers (GET /api/takeovers)
@@ -43,76 +49,93 @@ export const CreateTakeoverSchema = z.object({
   // Required fields
   address: SolanaAddressSchema,
   authority: SolanaAddressSchema,
-  v1TokenMint: SolanaAddressSchema,
+  v1_token_mint: SolanaAddressSchema,
   vault: SolanaAddressSchema,
   
-  // Optional basic fields
-  minAmount: PositiveNumberStringSchema.optional(),
-  startTime: TimestampStringSchema,
-  endTime: TimestampStringSchema,
-  customRewardRate: z.number()
+  // Optional basic fields with bigint compatibility
+  min_amount: AmountSchema,
+  start_time: TimestampSchema,
+  end_time: TimestampSchema,
+  custom_reward_rate: z.number()
     .min(0.1, 'Reward rate must be at least 0.1')
     .max(10, 'Reward rate must be at most 10')
     .optional(),
-  tokenName: z.string()
+  token_name: z.string()
     .min(1, 'Token name cannot be empty')
     .max(100, 'Token name must be at most 100 characters')
     .optional(),
-  imageUrl: z.string()
+  image_url: z.string()
     .url('Must be a valid URL')
     .optional(),
   
+  // V2 migration fields
+  has_v2_mint: z.boolean().optional(),
+  v2_token_mint: SolanaAddressSchema.optional(),
+  v1_total_supply: AmountSchema,
+  v2_total_supply: AmountSchema,
+  
   // Billion-scale takeover fields
-  rewardRateBp: z.number()
+  reward_rate_bp: z.number()
     .int('Reward rate BP must be an integer')
     .min(1, 'Reward rate BP must be at least 1')
     .max(10000, 'Reward rate BP must be at most 10000')
     .optional(),
-  calculatedMinAmount: PositiveNumberStringSchema.optional(),
-  maxSafeTotalContribution: PositiveNumberStringSchema.optional(),
-  targetParticipationBp: z.number()
+  calculated_min_amount: AmountSchema,
+  max_safe_total_contribution: AmountSchema,
+  target_participation_bp: z.number()
     .int('Target participation BP must be an integer')
     .min(1, 'Target participation BP must be at least 1')
     .max(10000, 'Target participation BP must be at most 10000')
     .optional(),
-  v1MarketPriceLamports: PositiveNumberStringSchema.optional(),
-  signature: z.string()
-    .min(64, 'Signature must be at least 64 characters')
-    .max(128, 'Signature must be at most 128 characters')
-    .optional(),
+  v1_market_price_lamports: AmountSchema,
+  
+  // Liquidity fields
+  sol_for_liquidity: AmountSchema,
+  reward_pool_tokens: AmountSchema,
+  liquidity_pool_tokens: AmountSchema,
 })
 .refine(data => {
   // If billion-scale fields are provided, ensure consistency
   const billionScaleFields = [
-    data.rewardRateBp,
-    data.calculatedMinAmount,
-    data.maxSafeTotalContribution,
-    data.targetParticipationBp
+    data.reward_rate_bp,
+    data.calculated_min_amount,
+    data.max_safe_total_contribution,
+    data.target_participation_bp
   ];
   
   const hasBillionScaleFields = billionScaleFields.some(field => field !== undefined);
   
   if (hasBillionScaleFields) {
     // If any billion-scale field is provided, require the essential ones
-    return data.rewardRateBp !== undefined && data.calculatedMinAmount !== undefined;
+    return data.reward_rate_bp !== undefined && data.calculated_min_amount !== undefined;
   }
   
   return true;
 }, {
-  message: 'For billion-scale takeovers, rewardRateBp and calculatedMinAmount are required',
-  path: ['rewardRateBp'],
+  message: 'For billion-scale takeovers, reward_rate_bp and calculated_min_amount are required',
+  path: ['reward_rate_bp'],
 })
 .refine(data => {
   // Validate time logic
-  if (data.startTime && data.endTime) {
-    const start = parseInt(data.startTime);
-    const end = parseInt(data.endTime);
+  if (data.start_time && data.end_time) {
+    const start = typeof data.start_time === 'string' ? parseInt(data.start_time) : data.start_time;
+    const end = typeof data.end_time === 'string' ? parseInt(data.end_time) : data.end_time;
     return start < end;
   }
   return true;
 }, {
   message: 'End time must be after start time',
-  path: ['endTime'],
+  path: ['end_time'],
+})
+.refine(data => {
+  // If V2 mint is enabled, require V2 token mint
+  if (data.has_v2_mint === true) {
+    return data.v2_token_mint !== undefined;
+  }
+  return true;
+}, {
+  message: 'V2 token mint is required when V2 mint is enabled',
+  path: ['v2_token_mint'],
 });
 
 /**
@@ -121,48 +144,87 @@ export const CreateTakeoverSchema = z.object({
 export const UpdateTakeoverSchema = z.object({
   address: SolanaAddressSchema,
   
-  // Fields that can be updated
-  totalContributed: PositiveNumberStringSchema.optional(),
-  contributorCount: z.number()
+  // Fields that can be updated (all optional)
+  total_contributed: AmountSchema,
+  contributor_count: z.number()
     .int('Contributor count must be an integer')
     .min(0, 'Contributor count cannot be negative')
     .optional(),
-  isFinalized: z.boolean().optional(),
-  isSuccessful: z.boolean().optional(),
-  customRewardRate: z.number()
+  is_finalized: z.boolean().optional(),
+  is_successful: z.boolean().optional(),
+  custom_reward_rate: z.number()
     .min(0.1, 'Reward rate must be at least 0.1')
     .max(10, 'Reward rate must be at most 10')
     .optional(),
-  tokenName: z.string()
+  token_name: z.string()
     .min(1, 'Token name cannot be empty')
     .max(100, 'Token name must be at most 100 characters')
     .optional(),
-  imageUrl: z.string()
+  image_url: z.string()
     .url('Must be a valid URL')
+    .optional(),
+  
+  // V2 and migration fields
+  has_v2_mint: z.boolean().optional(),
+  v2_token_mint: SolanaAddressSchema.optional(),
+  v2_total_supply: AmountSchema,
+  reward_pool_tokens: AmountSchema,
+  liquidity_pool_tokens: AmountSchema,
+  
+  // Process completion flags
+  jupiter_swap_completed: z.boolean().optional(),
+  lp_created: z.boolean().optional(),
+  
+  // Final metrics
+  participation_rate_bp: z.number()
+    .int('Participation rate BP must be an integer')
+    .min(0, 'Participation rate BP cannot be negative')
+    .max(10000, 'Participation rate BP cannot exceed 10000')
+    .optional(),
+  final_safety_utilization: z.number()
+    .min(0, 'Final safety utilization cannot be negative')
+    .max(1, 'Final safety utilization cannot exceed 1')
+    .optional(),
+  final_reward_rate: z.number()
+    .min(0, 'Final reward rate cannot be negative')
     .optional(),
 })
 .refine(data => {
-  // If takeover is marked as finalized, isSuccessful must be provided
-  if (data.isFinalized === true) {
-    return data.isSuccessful !== undefined;
+  // If takeover is marked as finalized, is_successful must be provided
+  if (data.is_finalized === true) {
+    return data.is_successful !== undefined;
   }
   return true;
 }, {
   message: 'When finalizing a takeover, success status must be specified',
-  path: ['isSuccessful'],
+  path: ['is_successful'],
+})
+.refine(data => {
+  // If V2 mint is enabled, require V2 token mint
+  if (data.has_v2_mint === true) {
+    return data.v2_token_mint !== undefined;
+  }
+  return true;
+}, {
+  message: 'V2 token mint is required when V2 mint is enabled',
+  path: ['v2_token_mint'],
 });
 
 /**
  * Schema for contribution data
  */
 export const ContributionSchema = z.object({
-  takeoverAddress: SolanaAddressSchema,
-  contributorAddress: SolanaAddressSchema,
+  takeover_address: SolanaAddressSchema,
+  contributor_address: SolanaAddressSchema,
   amount: PositiveNumberStringSchema,
   signature: z.string()
     .min(64, 'Signature must be at least 64 characters')
     .max(128, 'Signature must be at most 128 characters'),
-  timestamp: TimestampStringSchema.optional(),
+  block_height: z.number()
+    .int('Block height must be an integer')
+    .positive('Block height must be positive')
+    .optional(),
+  timestamp: TimestampSchema,
 });
 
 /**
@@ -174,14 +236,6 @@ export const TakeoverStatsQuerySchema = z.object({
 }).optional();
 
 /**
- * Schema for image upload
- */
-export const ImageUploadSchema = z.object({
-  takeoverAddress: SolanaAddressSchema,
-  imageType: z.enum(['logo', 'banner', 'preview']).optional(),
-});
-
-/**
  * Schema for finalization request
  */
 export const FinalizeTakeoverSchema = z.object({
@@ -189,12 +243,64 @@ export const FinalizeTakeoverSchema = z.object({
   signature: z.string()
     .min(64, 'Signature must be at least 64 characters')
     .max(128, 'Signature must be at most 128 characters'),
-  isSuccessful: z.boolean(),
-  finalTotalContributed: PositiveNumberStringSchema.optional(),
-  finalContributorCount: z.number()
+  is_successful: z.boolean(),
+  final_total_contributed: AmountSchema,
+  final_contributor_count: z.number()
     .int('Final contributor count must be an integer')
     .min(0, 'Final contributor count cannot be negative')
     .optional(),
+  participation_rate_bp: z.number()
+    .int('Participation rate BP must be an integer')
+    .min(0, 'Participation rate BP cannot be negative')
+    .max(10000, 'Participation rate BP cannot exceed 10000')
+    .optional(),
+  final_safety_utilization: z.number()
+    .min(0, 'Final safety utilization cannot be negative')
+    .max(1, 'Final safety utilization cannot exceed 1')
+    .optional(),
+  final_reward_rate: z.number()
+    .min(0, 'Final reward rate cannot be negative')
+    .optional(),
+});
+
+/**
+ * Schema for V2 migration request
+ */
+export const V2MigrationSchema = z.object({
+  address: SolanaAddressSchema,
+  v2_token_mint: SolanaAddressSchema,
+  v2_total_supply: PositiveNumberStringSchema,
+  reward_pool_tokens: PositiveNumberStringSchema,
+  liquidity_pool_tokens: PositiveNumberStringSchema,
+  sol_for_liquidity: PositiveNumberStringSchema,
+  signature: z.string()
+    .min(64, 'Signature must be at least 64 characters')
+    .max(128, 'Signature must be at most 128 characters'),
+});
+
+/**
+ * Schema for Jupiter swap completion
+ */
+export const JupiterSwapSchema = z.object({
+  address: SolanaAddressSchema,
+  swap_signature: z.string()
+    .min(64, 'Swap signature must be at least 64 characters')
+    .max(128, 'Swap signature must be at most 128 characters'),
+  tokens_swapped: PositiveNumberStringSchema,
+  sol_received: PositiveNumberStringSchema,
+});
+
+/**
+ * Schema for LP creation completion
+ */
+export const LPCreationSchema = z.object({
+  address: SolanaAddressSchema,
+  lp_signature: z.string()
+    .min(64, 'LP signature must be at least 64 characters')
+    .max(128, 'LP signature must be at most 128 characters'),
+  lp_token_mint: SolanaAddressSchema,
+  tokens_provided: PositiveNumberStringSchema,
+  sol_provided: PositiveNumberStringSchema,
 });
 
 /**
@@ -206,15 +312,17 @@ export const SearchTakeoversSchema = z.object({
     .max(100, 'Search query too long'),
   filters: z.object({
     status: z.array(z.enum(['active', 'finalized', 'successful', 'failed', 'expired'])).optional(),
-    minAmount: PositiveNumberStringSchema.optional(),
-    maxAmount: PositiveNumberStringSchema.optional(),
-    rewardRateMin: z.number().min(0).optional(),
-    rewardRateMax: z.number().max(10).optional(),
-    createdAfter: TimestampStringSchema.optional(),
-    createdBefore: TimestampStringSchema.optional(),
+    min_amount: AmountSchema,
+    max_amount: AmountSchema,
+    reward_rate_min: z.number().min(0).optional(),
+    reward_rate_max: z.number().max(10).optional(),
+    has_v2_mint: z.boolean().optional(),
+    is_billion_scale: z.boolean().optional(),
+    created_after: TimestampSchema,
+    created_before: TimestampSchema,
   }).optional(),
   sort: z.object({
-    field: z.enum(['created_at', 'total_contributed', 'contributor_count', 'end_time']),
+    field: z.enum(['created_at', 'total_contributed', 'contributor_count', 'end_time', 'participation_rate_bp']),
     order: z.enum(['asc', 'desc']),
   }).optional(),
   pagination: z.object({
@@ -231,9 +339,11 @@ export const BulkUpdateTakeoversSchema = z.object({
     .min(1, 'At least one address is required')
     .max(50, 'Cannot update more than 50 takeovers at once'),
   updates: z.object({
-    isFinalized: z.boolean().optional(),
-    isSuccessful: z.boolean().optional(),
-    customRewardRate: z.number().min(0.1).max(10).optional(),
+    is_finalized: z.boolean().optional(),
+    is_successful: z.boolean().optional(),
+    custom_reward_rate: z.number().min(0.1).max(10).optional(),
+    jupiter_swap_completed: z.boolean().optional(),
+    lp_created: z.boolean().optional(),
   }),
   signature: z.string()
     .min(64, 'Signature must be at least 64 characters')
@@ -255,10 +365,22 @@ export function isValidSolanaAddress(address: string): boolean {
 /**
  * Utility function to validate timestamp
  */
-export function isValidTimestamp(timestamp: string): boolean {
+export function isValidTimestamp(timestamp: string | number): boolean {
   try {
-    const ts = parseInt(timestamp);
+    const ts = typeof timestamp === 'string' ? parseInt(timestamp) : timestamp;
     return ts > 0 && ts < Date.now() / 1000 + 365 * 24 * 60 * 60; // Within next year
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Utility function to validate amount
+ */
+export function isValidAmount(amount: string | number): boolean {
+  try {
+    const amt = typeof amount === 'string' ? BigInt(amount) : BigInt(amount);
+    return amt >= 0n;
   } catch {
     return false;
   }
@@ -272,7 +394,9 @@ export type CreateTakeoverData = z.infer<typeof CreateTakeoverSchema>;
 export type UpdateTakeoverData = z.infer<typeof UpdateTakeoverSchema>;
 export type ContributionData = z.infer<typeof ContributionSchema>;
 export type TakeoverStatsQuery = z.infer<typeof TakeoverStatsQuerySchema>;
-export type ImageUploadData = z.infer<typeof ImageUploadSchema>;
 export type FinalizeTakeoverData = z.infer<typeof FinalizeTakeoverSchema>;
+export type V2MigrationData = z.infer<typeof V2MigrationSchema>;
+export type JupiterSwapData = z.infer<typeof JupiterSwapSchema>;
+export type LPCreationData = z.infer<typeof LPCreationSchema>;
 export type SearchTakeoversData = z.infer<typeof SearchTakeoversSchema>;
 export type BulkUpdateTakeoversData = z.infer<typeof BulkUpdateTakeoversSchema>;
