@@ -10,7 +10,44 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { ImageUpload } from "@/components/image-upload";
 import { PROGRAM_ID, TREASURY_ADDRESS } from "@/lib/constants";
+
+// Helper functions for SOL <-> Lamports conversion
+const solToLamports = (solAmount: string): string => {
+  if (!solAmount || isNaN(parseFloat(solAmount))) {
+    return "0";
+  }
+  const lamports = parseFloat(solAmount) * 1_000_000_000; // 1 SOL = 1B lamports
+  return Math.floor(lamports).toString();
+};
+
+const lamportsToSol = (lamports: string): string => {
+  if (!lamports || isNaN(parseFloat(lamports))) {
+    return "0";
+  }
+  const sol = parseFloat(lamports) / 1_000_000_000;
+  return sol.toString();
+};
+
+// Price validation helper
+const validateSolPrice = (solPrice: string): string | null => {
+  const price = parseFloat(solPrice);
+  
+  if (isNaN(price) || price <= 0) {
+    return "Price must be greater than 0";
+  }
+  
+  if (price < 0.000000001) {
+    return "Price too small (minimum 0.000000001 SOL)";
+  }
+  
+  if (price > 1000) {
+    return "Price too large (maximum 1000 SOL)";
+  }
+  
+  return null; // Valid
+};
 
 // Fixed function to create initialize_billion_scale instruction (matches deployed IDL exactly)
 function createInitializeBillionScaleInstruction(
@@ -79,7 +116,7 @@ export default function CreatePage() {
     duration: "7",
     rewardRateBp: "125",
     targetParticipationBp: "3000",
-    v1MarketPriceLamports: "1000000",
+    v1TokenPriceSol: "0.001", // Changed from v1MarketPriceLamports to SOL
     tokenName: "",
     imageUrl: ""
   });
@@ -109,19 +146,32 @@ export default function CreatePage() {
         throw new Error(`Insufficient SOL balance. You have ${balance / 1_000_000_000} SOL, but need at least 0.01 SOL for transaction fees and account creation.`);
       }
       
+      // Convert SOL to lamports for the smart contract
+      const v1MarketPriceLamports = solToLamports(formData.v1TokenPriceSol);
+      
+      // Validate price
+      const priceError = validateSolPrice(formData.v1TokenPriceSol);
+      if (priceError) {
+        throw new Error(priceError);
+      }
+      
+      if (parseFloat(v1MarketPriceLamports) < 1) {
+        throw new Error("Price must be at least 1 lamport (0.000000001 SOL)");
+      }
+      
       // Parse form data
       const v1Mint = new PublicKey(formData.v1TokenMint);
-      const duration = BigInt(Number(formData.duration)); // ✅ FIXED: Pass days directly, not seconds
+      const duration = BigInt(Number(formData.duration));
       const rewardRateBp = Number(formData.rewardRateBp);
       const targetParticipationBp = Number(formData.targetParticipationBp);
-      const v1MarketPriceLamports = BigInt(formData.v1MarketPriceLamports);
+      const v1MarketPriceLamportsBigInt = BigInt(v1MarketPriceLamports);
       
       console.log("📊 Billion-scale form data parsed:");
       console.log("   V1 Mint:", v1Mint.toString());
-      console.log("   Duration:", duration.toString(), "days (", Number(duration) * 86400, "seconds)"); // ✅ FIXED: Now shows days
+      console.log("   Duration:", duration.toString(), "days (", Number(duration) * 86400, "seconds)");
       console.log("   Reward Rate:", rewardRateBp, "bp (", rewardRateBp/100, "x)");
       console.log("   Target Participation:", targetParticipationBp, "bp (", targetParticipationBp/100, "%)");
-      console.log("   V1 Market Price:", v1MarketPriceLamports.toString(), "lamports");
+      console.log("   V1 Market Price:", formData.v1TokenPriceSol, "SOL =", v1MarketPriceLamports, "lamports");
       
       // Validate parameters
       if (rewardRateBp < 100 || rewardRateBp > 200) {
@@ -159,36 +209,27 @@ export default function CreatePage() {
       let mintInfo;
       try {
         mintInfo = await connection.getParsedAccountInfo(v1Mint);
-        if (!mintInfo.value || !('parsed' in mintInfo.value.data)) {
-          throw new Error("V1 token mint not found or invalid");
+        if (!mintInfo.value || !mintInfo.value.data || !('parsed' in mintInfo.value.data)) {
+          throw new Error("Invalid V1 token mint - account not found or not a token mint");
         }
         
-        const mintData = mintInfo.value.data.parsed.info;
-        const supply = BigInt(mintData.supply);
-        const decimals = mintData.decimals;
-        
-        console.log("   Supply:", supply.toString());
-        console.log("   Decimals:", decimals);
-        
-        // Check billion-scale supply constraints
-        const minSupply = BigInt(1_000_000) * BigInt(10 ** decimals); // 1M tokens
-        const maxSupply = BigInt(10_000_000_000) * BigInt(10 ** decimals); // 10B tokens
-        
-        if (supply < minSupply) {
-          throw new Error(`Token supply too small: ${supply} < ${minSupply} (minimum 1M tokens)`);
-        }
-        if (supply > maxSupply) {
-          throw new Error(`Token supply too large: ${supply} > ${maxSupply} (maximum 10B tokens)`);
+        const parsed = mintInfo.value.data.parsed;
+        if (!parsed.info) {
+          throw new Error("Invalid V1 token mint - missing mint info");
         }
         
-        console.log("   ✅ Token validation passed");
-      } catch (error: any) {
-        throw new Error(`V1 token validation failed: ${error.message}`);
+        console.log("📊 V1 token info:");
+        console.log("   Supply:", parsed.info.supply);
+        console.log("   Decimals:", parsed.info.decimals);
+        console.log("   Mint Authority:", parsed.info.mintAuthority);
+        
+      } catch (mintError) {
+        console.error("❌ V1 mint validation failed:", mintError);
+        throw new Error(`Invalid V1 token mint: ${mintError instanceof Error ? mintError.message : 'Unknown error'}`);
       }
       
-      // Create the initialize_billion_scale instruction (FIXED with correct IDL)
-      console.log("⚙️ Creating initialize_billion_scale instruction...");
-      const initializeIx = createInitializeBillionScaleInstruction(
+      // Create the instruction
+      const instruction = createInitializeBillionScaleInstruction(
         new PublicKey(PROGRAM_ID),
         publicKey,
         treasuryAddress,
@@ -198,192 +239,72 @@ export default function CreatePage() {
         duration,
         rewardRateBp,
         targetParticipationBp,
-        v1MarketPriceLamports
+        v1MarketPriceLamportsBigInt
       );
       
-      console.log("📦 Instruction created successfully");
+      // Build and send transaction
+      const transaction = new Transaction().add(instruction);
       
-      // Build and validate transaction
-      const transaction = new Transaction();
-      transaction.add(initializeIx);
-      
-      // Get recent blockhash and set fee payer
-      console.log("🔗 Getting recent blockhash...");
-      const { blockhash } = await connection.getLatestBlockhash("confirmed");
+      // Get recent blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
       
-      // Sign with vault keypair (required by IDL)
+      // Vault must sign the transaction
       transaction.partialSign(vault);
       
-      console.log("✍️ Transaction built and vault signed");
+      console.log("📡 Sending billion-scale takeover creation transaction...");
       
-      // Validate transaction before sending
-      try {
-        const serialized = transaction.serialize({ requireAllSignatures: false });
-        console.log("📊 Transaction validation:");
-        console.log("   Size:", serialized.length, "bytes");
-        console.log("   Instructions:", transaction.instructions.length);
-        console.log("   Signers:", transaction.signatures.length);
-        
-        if (serialized.length > 1232) {
-          throw new Error(`Transaction too large: ${serialized.length} bytes (max 1232)`);
-        }
-      } catch (validationError: any) {
-        console.error("❌ Transaction validation failed:", validationError.message);
-        throw new Error(`Transaction validation failed: ${validationError.message}`);
-      }
+      // Send transaction
+      const signature = await sendTransaction(transaction, connection, {
+        signers: [vault]
+      });
       
-      // Send transaction with better error handling
-      console.log("📡 Sending transaction...");
-      console.log("📦 Transaction size:", transaction.serializeMessage().length, "bytes");
+      console.log("✅ Transaction sent:", signature);
       
-      let signature;
-      try {
-        // Manual simulation to debug preflight issues
-        console.log("🧪 Running manual simulation...");
-        try {
-          const simulation = await connection.simulateTransaction(transaction);
-          
-          if (simulation.value.err) {
-            console.error("❌ Simulation failed:", simulation.value.err);
-            console.error("📋 Simulation logs:", simulation.value.logs);
-            throw new Error(`Simulation failed: ${JSON.stringify(simulation.value.err)}`);
-          } else {
-            console.log("✅ Simulation passed");
-            console.log("🔥 Compute units used:", simulation.value.unitsConsumed);
-          }
-        } catch (simError: any) {
-          console.error("⚠️ Manual simulation failed:", simError.message);
-          // Continue anyway, sometimes simulation fails but transaction succeeds
-        }
-        
-        // First try with preflight disabled (common wallet issue workaround)
-        signature = await sendTransaction(transaction, connection, {
-          skipPreflight: true,  // Skip preflight to avoid wallet adapter issues
-          preflightCommitment: "confirmed",
-          maxRetries: 3
-        });
-      } catch (walletError: any) {
-        console.log("⚠️ First attempt failed, trying alternative method...");
-        console.log("Wallet error:", walletError.message);
-        
-        // Alternative: Try with different settings
-        try {
-          signature = await sendTransaction(transaction, connection, {
-            skipPreflight: true,
-            preflightCommitment: "processed",
-            maxRetries: 1
-          });
-        } catch (secondError: any) {
-          console.error("❌ Both sending methods failed");
-          console.error("Second error:", secondError.message);
-          
-          // Last resort: Manual signing and sending
-          console.log("🔧 Trying manual signing method...");
-          try {
-            if (!signTransaction) {
-              throw new Error("Manual signing not supported by wallet");
-            }
-            
-            // Get wallet to sign the transaction
-            const signedTx = await signTransaction(transaction);
-            
-            // Send raw transaction
-            signature = await connection.sendRawTransaction(signedTx.serialize(), {
-              skipPreflight: true,
-              maxRetries: 3
-            });
-            
-            console.log("✅ Manual signing succeeded");
-          } catch (manualError: any) {
-            console.error("❌ Manual signing also failed:", manualError.message);
-            throw new Error(`All transaction methods failed. Last error: ${manualError.message}`);
-          }
-        }
-      }
+      // Wait for confirmation
+      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
       
-      console.log("📝 Transaction sent, signature:", signature);
-      
-      // Confirm transaction
-      console.log("⏳ Confirming transaction...");
-      try {
-        const confirmation = await connection.confirmTransaction(signature, "confirmed");
-        
-        if (confirmation.value.err) {
-          console.error("❌ Transaction failed on-chain:", confirmation.value.err);
-          throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
-        }
-        
-        console.log("✅ Transaction confirmed successfully!");
-      } catch (confirmError: any) {
-        console.error("⚠️ Confirmation error:", confirmError);
-        
-        // Try to get transaction details for debugging
-        try {
-          const txDetails = await connection.getTransaction(signature, {
-            commitment: "confirmed",
-            maxSupportedTransactionVersion: 0
-          });
-          console.error("📋 Transaction details:", txDetails);
-          
-          if (txDetails?.meta?.err) {
-            throw new Error(`On-chain error: ${JSON.stringify(txDetails.meta.err)}`);
-          }
-        } catch (detailError) {
-          console.error("❌ Could not fetch transaction details:", detailError);
-        }
-        
-        throw confirmError;
+      if (confirmation.value.err) {
+        throw new Error(`Transaction failed: ${confirmation.value.err}`);
       }
       
       console.log("🎉 Billion-scale takeover created successfully!");
       
-      // Save to database
-      console.log("💾 Saving to database...");
-      const startTime = Math.floor(Date.now() / 1000);
-      const endTime = startTime + (Number(duration) * 86400); // Convert days to seconds for timestamp
-      
-      const dbPayload = {
-        address: takeoverPDA.toString(),
-        authority: publicKey.toString(),
-        v1TokenMint: v1Mint.toString(),
-        vault: vault.publicKey.toString(),
+      // Store in database
+      try {
+        console.log("💾 Storing takeover in database...");
         
-        // Billion-scale specific fields
-        rewardRateBp,
-        targetParticipationBp,
-        v1MarketPriceLamports: v1MarketPriceLamports.toString(),
+        const dbResponse = await fetch('/api/takeovers', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            address: takeoverPDA.toString(),
+            authority: publicKey.toString(),
+            v1TokenMint: v1Mint.toString(),
+            vault: vault.publicKey.toString(),
+            duration: Number(duration),
+            rewardRateBp,
+            targetParticipationBp,
+            v1MarketPriceLamports: v1MarketPriceLamports,
+            tokenName: formData.tokenName,
+            imageUrl: formData.imageUrl,
+            signature: signature
+          })
+        });
         
-        // Legacy compatibility fields
-        customRewardRate: rewardRateBp / 100,
-        startTime: startTime.toString(),
-        endTime: endTime.toString(),
-        minAmount: "0", // Will be calculated by program
+        if (!dbResponse.ok) {
+          console.warn("⚠️ Database storage failed, but takeover was created on-chain");
+        } else {
+          console.log("✅ Takeover stored in database");
+        }
         
-        // Metadata
-        tokenName: formData.tokenName,
-        imageUrl: formData.imageUrl,
-        
-        // Transaction info
-        signature,
-        created_at: new Date().toISOString(),
-      };
-      
-      const dbResponse = await fetch('/api/takeovers', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(dbPayload)
-      });
-      
-      if (!dbResponse.ok) {
-        console.warn("⚠️ Database save failed, but takeover was created on-chain");
-      } else {
-        console.log("✅ Saved to database successfully");
+      } catch (dbError) {
+        console.warn("⚠️ Database error (takeover still created):", dbError);
       }
       
       toast({
-        title: "🚀 Billion-Scale Takeover Created!",
+        title: "🎉 Billion-Scale Takeover Created!",
         description: `Conservative takeover initialized with ${rewardRateBp/100}x reward rate and billion-scale safety features`,
         duration: 8000
       });
@@ -394,7 +315,7 @@ export default function CreatePage() {
         duration: "7",
         rewardRateBp: "125",
         targetParticipationBp: "3000", 
-        v1MarketPriceLamports: "1000000",
+        v1TokenPriceSol: "0.001", // Reset to SOL
         tokenName: "",
         imageUrl: ""
       });
@@ -436,36 +357,39 @@ export default function CreatePage() {
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* V1 Token Section */}
             <div className="space-y-4">
-              <h3 className="text-lg font-semibold">Token Information</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <h3 className="text-lg font-semibold">V1 Token Information</h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="tokenName">Token Name *</Label>
+                  <Input
+                    id="tokenName"
+                    value={formData.tokenName}
+                    onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
+                    placeholder="e.g., My Token"
+                    required
+                  />
+                </div>
+                
                 <div className="space-y-2">
                   <Label htmlFor="v1TokenMint">V1 Token Mint Address *</Label>
                   <Input
                     id="v1TokenMint"
                     value={formData.v1TokenMint}
                     onChange={(e) => setFormData(prev => ({ ...prev, v1TokenMint: e.target.value }))}
-                    placeholder="Token mint address"
+                    placeholder="Enter V1 token mint address"
                     required
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label htmlFor="tokenName">Token Name</Label>
-                  <Input
-                    id="tokenName"
-                    value={formData.tokenName}
-                    onChange={(e) => setFormData(prev => ({ ...prev, tokenName: e.target.value }))}
-                    placeholder="My Awesome Token"
-                  />
-                </div>
               </div>
-              
+
+              {/* Image Upload */}
               <div className="space-y-2">
-                <Label htmlFor="imageUrl">Token Image URL (optional)</Label>
-                <Input
-                  id="imageUrl"
-                  value={formData.imageUrl}
-                  onChange={(e) => setFormData(prev => ({ ...prev, imageUrl: e.target.value }))}
-                  placeholder="https://example.com/token-image.png"
+                <Label>Token Image (Optional)</Label>
+                <ImageUpload
+                  onImageUploaded={(imageUrl) => setFormData(prev => ({ ...prev, imageUrl }))}
+                  currentImageUrl={formData.imageUrl}
+                  label="Token Image"
                 />
               </div>
             </div>
@@ -473,9 +397,10 @@ export default function CreatePage() {
             {/* Campaign Parameters */}
             <div className="space-y-4">
               <h3 className="text-lg font-semibold">Campaign Parameters</h3>
-              <div className="grid grid-cols-2 gap-4">
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="duration">Duration (days) *</Label>
+                  <Label htmlFor="duration">Duration (Days) *</Label>
                   <Input
                     id="duration"
                     type="number"
@@ -485,9 +410,11 @@ export default function CreatePage() {
                     onChange={(e) => setFormData(prev => ({ ...prev, duration: e.target.value }))}
                     required
                   />
+                  <p className="text-xs text-gray-500">1-30 days maximum</p>
                 </div>
+                
                 <div className="space-y-2">
-                  <Label htmlFor="rewardRateBp">Reward Rate (basis points) *</Label>
+                  <Label htmlFor="rewardRateBp">Reward Rate (Basis Points) *</Label>
                   <Input
                     id="rewardRateBp"
                     type="number"
@@ -498,14 +425,12 @@ export default function CreatePage() {
                     required
                   />
                   <p className="text-xs text-gray-500">
-                    100 = 1.0x, 125 = 1.25x, 150 = 1.5x, 200 = 2.0x (max)
+                    {(parseInt(formData.rewardRateBp || "100") / 100).toFixed(1)}x reward rate (1.0x - 2.0x for safety)
                   </p>
                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
+                
                 <div className="space-y-2">
-                  <Label htmlFor="targetParticipationBp">Target Participation (basis points) *</Label>
+                  <Label htmlFor="targetParticipationBp">Target Participation (Basis Points) *</Label>
                   <Input
                     id="targetParticipationBp"
                     type="number"
@@ -516,22 +441,49 @@ export default function CreatePage() {
                     required
                   />
                   <p className="text-xs text-gray-500">
-                    100 = 1%, 1000 = 10%, 3000 = 30%, 10000 = 100%
+                    {(parseInt(formData.targetParticipationBp || "100") / 100).toFixed(1)}% participation target
                   </p>
                 </div>
+                
                 <div className="space-y-2">
-                  <Label htmlFor="v1MarketPriceLamports">V1 Token Price (lamports) *</Label>
-                  <Input
-                    id="v1MarketPriceLamports"
-                    type="number"
-                    min="1"
-                    value={formData.v1MarketPriceLamports}
-                    onChange={(e) => setFormData(prev => ({ ...prev, v1MarketPriceLamports: e.target.value }))}
-                    required
-                  />
-                  <p className="text-xs text-gray-500">
-                    1000000 = 0.001 SOL per token
-                  </p>
+                  <Label htmlFor="v1TokenPriceSol">V1 Token Price (SOL per token) *</Label>
+                  <div className="relative">
+                    <Input
+                      id="v1TokenPriceSol"
+                      type="number"
+                      step="0.000000001"
+                      min="0.000000001"
+                      max="1000"
+                      value={formData.v1TokenPriceSol}
+                      onChange={(e) => setFormData(prev => ({ 
+                        ...prev, 
+                        v1TokenPriceSol: e.target.value 
+                      }))}
+                      placeholder="0.001"
+                      className={validateSolPrice(formData.v1TokenPriceSol) ? "border-red-300" : ""}
+                      required
+                    />
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <span className="text-gray-400 text-sm">SOL</span>
+                    </div>
+                  </div>
+                  
+                  {/* Validation Error */}
+                  {validateSolPrice(formData.v1TokenPriceSol) && (
+                    <p className="text-xs text-red-500">
+                      {validateSolPrice(formData.v1TokenPriceSol)}
+                    </p>
+                  )}
+                  
+                  {/* Helper Text */}
+                  <div className="text-xs text-gray-500 space-y-1">
+                    <p>💡 Common values: 0.001 SOL, 0.0001 SOL, 0.00001 SOL</p>
+                    <p>📊 Equivalent: {formData.v1TokenPriceSol} SOL = {
+                      parseFloat(formData.v1TokenPriceSol || "0") > 0 ? 
+                        `${(parseFloat(formData.v1TokenPriceSol) * 1_000_000_000).toLocaleString()} lamports` : 
+                        "0 lamports"
+                    }</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -545,12 +497,13 @@ export default function CreatePage() {
                 <li>• Proportionate minimum amount calculation</li>
                 <li>• Target participation controls campaign scope</li>
                 <li>• Automatic refunds if campaign fails</li>
+                <li>• Built-in 2% safety cushion prevents overflow</li>
               </ul>
             </div>
 
             <Button 
               type="submit" 
-              disabled={loading}
+              disabled={loading || !!validateSolPrice(formData.v1TokenPriceSol)}
               className="w-full"
             >
               {loading ? (
