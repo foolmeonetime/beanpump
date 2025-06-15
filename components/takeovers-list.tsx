@@ -64,7 +64,20 @@ const safePercentage = (current: any, total: any): number => {
   return Math.min(100, (currentNum / totalNum) * 100);
 };
 
-// Safe integer parsing
+// Safe number formatting (returns number, not string)
+const safeNumber = (value: any, fallback: number = 0): number => {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  
+  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+  
+  if (isNaN(num)) {
+    return fallback;
+  }
+  
+  return num;
+};
 const safeParseInt = (value: any, fallback: number = 0): number => {
   if (value === null || value === undefined || value === '') {
     return fallback;
@@ -571,7 +584,7 @@ export function TakeoversList() {
                       </span>
                     </div>
                     <div className="space-y-1">
-                      <Progress value={safeFormat(takeover.progressPercentage, 1)} className="h-2" />
+                      <Progress value={safeNumber(takeover.progressPercentage, 0)} className="h-2" />
                       <div className="flex justify-between text-xs text-gray-500">
                         <span>{safeFormat(takeover.progressPercentage, 1)}% complete</span>
                         <span>Goal: {(safeParseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
