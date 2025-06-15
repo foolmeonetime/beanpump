@@ -47,54 +47,56 @@ export function useSimpleAutoFinalize() {
     autoFinalizingRef.current = autoFinalizing;
   }, [autoFinalizing]);
 
-  const fetchTakeovers = useCallback(async (skipAutoFinalize = false) => {
-    try {
-      setError(null);
-      
-      const response = await fetch('/api/takeovers', {
-        cache: 'no-store',
-        headers: { 'Cache-Control': 'no-cache' }
+ const fetchTakeovers = useCallback(async (skipAutoFinalize = false) => {
+  try {
+    setError(null);
+    
+    const response = await fetch('/api/takeovers', {
+      cache: 'no-store',
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch takeovers');
+    }
+    
+    const data = await response.json();
+    
+    // FIX: Access the nested takeovers array correctly
+    const newTakeovers = data.data?.takeovers || data.takeovers || [];
+    
+    // Check for newly finalized takeovers using ref to avoid dependency
+    const currentTakeovers = takeoverRef.current;
+    if (currentTakeovers.length > 0) {
+      const newlyFinalized = newTakeovers.filter((newT: Takeover) => {
+        const oldT = currentTakeovers.find(old => old.id === newT.id);
+        return oldT && !oldT.isFinalized && newT.isFinalized;
       });
       
-      if (!response.ok) {
-        throw new Error('Failed to fetch takeovers');
-      }
-      
-      const data = await response.json();
-      const newTakeovers = data.takeovers || [];
-      
-      // Check for newly finalized takeovers using ref to avoid dependency
-      const currentTakeovers = takeoverRef.current;
-      if (currentTakeovers.length > 0) {
-        const newlyFinalized = newTakeovers.filter((newT: Takeover) => {
-          const oldT = currentTakeovers.find(old => old.id === newT.id);
-          return oldT && !oldT.isFinalized && newT.isFinalized;
+      // Show notifications for newly finalized takeovers
+      newlyFinalized.forEach((t: Takeover) => {
+        toast({
+          title: t.isSuccessful ? "🎉 Takeover Successful!" : "⏰ Takeover Ended",
+          description: `${t.tokenName} takeover has been finalized. ${t.isSuccessful ? 'Contributors can now claim V2 tokens!' : 'Contributors can claim refunds.'}`,
+          duration: 8000
         });
-        
-        // Show notifications for newly finalized takeovers
-        newlyFinalized.forEach((t: Takeover) => {
-          toast({
-            title: t.isSuccessful ? "🎉 Takeover Successful!" : "⏰ Takeover Ended",
-            description: `${t.tokenName} takeover has been finalized. ${t.isSuccessful ? 'Contributors can now claim V2 tokens!' : 'Contributors can claim refunds.'}`,
-            duration: 8000
-          });
-        });
-      }
-      
-      setTakeovers(newTakeovers);
-      
-      // Auto-check for finalization only if not skipped and not already auto-finalizing
-      if (!skipAutoFinalize && !autoFinalizingRef.current) {
-        await checkAndAutoFinalize(newTakeovers);
-      }
-      
-    } catch (error: any) {
-      console.error('Error fetching takeovers:', error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
+      });
     }
-  }, [toast]); // Remove takeovers from dependencies
+    
+    setTakeovers(newTakeovers);
+    
+    // Auto-check for finalization only if not skipped and not already auto-finalizing
+    if (!skipAutoFinalize && !autoFinalizingRef.current) {
+      await checkAndAutoFinalize(newTakeovers);
+    }
+    
+  } catch (error: any) {
+    console.error('Error fetching takeovers:', error);
+    setError(error.message);
+  } finally {
+    setLoading(false);
+  }
+}, [toast]); // Remove takeovers from dependencies
 
   const checkAndAutoFinalize = useCallback(async (takeoverList: Takeover[]) => {
     if (autoFinalizingRef.current) {

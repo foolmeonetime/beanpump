@@ -184,54 +184,55 @@ export default function Page() {
 
   // Fetch takeover details
   const fetchTakeoverDetails = async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      console.log("Fetching takeover details for address:", takeoverAddress);
-      
-      const response = await fetch('/api/takeovers');
-      if (!response.ok) {
-        throw new Error(`API request failed: ${response.status} ${response.statusText}`);
-      }
-      
-      const data = await response.json();
-      console.log("API response:", data);
-      
-      if (!data) {
-        throw new Error('No data received from API');
-      }
-      
-      let takeovers = data.takeovers || data || [];
-      
-      if (!Array.isArray(takeovers)) {
-        console.error("Response is not an array:", takeovers);
-        throw new Error('Invalid API response: expected array of takeovers');
-      }
-      
-      console.log("Looking for takeover with address:", takeoverAddress);
-      
-      const foundTakeover = takeovers.find((t: Takeover) => t.address === takeoverAddress);
-      
-      if (!foundTakeover) {
-        throw new Error(`Takeover not found with address: ${takeoverAddress}`);
-      }
-      
-      // Auto-detect billion-scale based on presence of billion-scale fields
-      if (foundTakeover.rewardRateBp !== undefined) {
-        foundTakeover.isBillionScale = true;
-      }
-      
-      console.log("Found takeover:", foundTakeover);
-      console.log("Is billion-scale:", foundTakeover.isBillionScale || foundTakeover.rewardRateBp !== undefined);
-      setTakeover(foundTakeover);
-    } catch (error: any) {
-      console.error('Error fetching takeover:', error);
-      setError(error.message);
-    } finally {
-      setLoading(false);
+  try {
+    setLoading(true);
+    setError(null);
+    
+    console.log("Fetching takeover details for address:", takeoverAddress);
+    
+    const response = await fetch('/api/takeovers');
+    if (!response.ok) {
+      throw new Error(`API request failed: ${response.status} ${response.statusText}`);
     }
-  };
+    
+    const data = await response.json();
+    console.log("API response:", data);
+    
+    if (!data) {
+      throw new Error('No data received from API');
+    }
+    
+    // FIX: Access the nested takeovers array correctly
+    let takeovers = data.data?.takeovers || data.takeovers || [];
+    
+    if (!Array.isArray(takeovers)) {
+      console.error("Response is not an array:", takeovers);
+      throw new Error('Invalid API response: expected array of takeovers');
+    }
+    
+    console.log("Looking for takeover with address:", takeoverAddress);
+    
+    const foundTakeover = takeovers.find((t: Takeover) => t.address === takeoverAddress);
+    
+    if (!foundTakeover) {
+      throw new Error(`Takeover not found with address: ${takeoverAddress}`);
+    }
+    
+    // Auto-detect billion-scale based on presence of billion-scale fields
+    if (foundTakeover.rewardRateBp !== undefined) {
+      foundTakeover.isBillionScale = true;
+    }
+    
+    console.log("Found takeover:", foundTakeover);
+    console.log("Is billion-scale:", foundTakeover.isBillionScale || foundTakeover.rewardRateBp !== undefined);
+    setTakeover(foundTakeover);
+  } catch (error: any) {
+    console.error('Error fetching takeover:', error);
+    setError(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   // Fetch user's token balance
   const fetchUserBalance = async () => {

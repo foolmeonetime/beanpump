@@ -31,7 +31,77 @@ interface Takeover {
   tokenName: string;
   imageUrl?: string;
   finalize_tx?: string;
+  calculatedMinAmount?: string;
 }
+
+const safeFormat = (value: any, decimals: number = 2): string => {
+  if (value === null || value === undefined || value === '') {
+    return '0.00';
+  }
+  
+  const num = typeof value === 'string' ? parseFloat(value) : Number(value);
+  
+  if (isNaN(num)) {
+    return '0.00';
+  }
+  
+  return num.toFixed(decimals);
+};
+
+// Safe percentage calculation
+const safePercentage = (current: any, total: any): number => {
+  if (!current || !total || current === '0' || total === '0') {
+    return 0;
+  }
+  
+  const currentNum = typeof current === 'string' ? parseFloat(current) : Number(current);
+  const totalNum = typeof total === 'string' ? parseFloat(total) : Number(total);
+  
+  if (isNaN(currentNum) || isNaN(totalNum) || totalNum === 0) {
+    return 0;
+  }
+  
+  return Math.min(100, (currentNum / totalNum) * 100);
+};
+
+// Safe integer parsing
+const safeParseInt = (value: any, fallback: number = 0): number => {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  
+  const num = typeof value === 'string' ? parseInt(value) : Number(value);
+  
+  if (isNaN(num)) {
+    return fallback;
+  }
+  
+  return num;
+};
+
+// Safe amount formatting for display
+const formatAmount = (amount: any): string => {
+  if (!amount || amount === '0') {
+    return '0';
+  }
+  
+  const num = typeof amount === 'string' ? parseFloat(amount) : Number(amount);
+  
+  if (isNaN(num)) {
+    return '0';
+  }
+  
+  // Convert from lamports to tokens (divide by 1M)
+  const tokens = num / 1_000_000;
+  
+  if (tokens >= 1_000_000) {
+    return `${(tokens / 1_000_000).toFixed(1)}M`;
+  } else if (tokens >= 1_000) {
+    return `${(tokens / 1_000).toFixed(1)}K`;
+  } else {
+    return tokens.toFixed(2);
+  }
+};
 
 export function TakeoversList() {
   const [takeovers, setTakeovers] = useState<Takeover[]>([])
@@ -50,44 +120,117 @@ export function TakeoversList() {
       
       console.log('🔄 Fetching takeovers...')
       
-      const response = await fetch('/api/takeovers', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store'
-      })
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+      // First, try the debug endpoint to check system health
+      try {
+        console.log('🔍 Testing system health...')
+        const debugResponse = await fetch('/api/debug', { cache: 'no-store' })
+        const debugData = await debugResponse.json()
+        console.log('🔍 System debug info:', debugData)
+        
+        if (debugData.error) {
+          console.error('❌ System health check failed:', debugData.error)
+          throw new Error(`System issue: ${debugData.error.message}`)
+        }
+        
+        if (!debugData.database) {
+          throw new Error('Database connection failed')
+        }
+        
+        if (!debugData.tables?.exists) {
+          throw new Error('Takeovers table does not exist')
+        }
+        
+      } catch (debugError) {
+        console.error('❌ Debug endpoint failed:', debugError)
+        // Continue with the main request anyway
       }
       
-      const data = await response.json()
-      console.log('📊 Received takeovers data:', data)
+      // Try the main API endpoint first
+      let response;
+      let data;
       
-      if (!data.takeovers || !Array.isArray(data.takeovers)) {
-        throw new Error('Invalid response format: missing takeovers array')
+      try {
+        console.log('🔄 Trying main API endpoint...')
+        response = await fetch('/api/takeovers', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store'
+        })
+        
+        if (!response.ok) {
+          throw new Error(`Main API failed: ${response.status} ${response.statusText}`)
+        }
+        
+        data = await response.json()
+        console.log('✅ Main API successful:', data)
+        
+        // Handle the nested data structure
+        const takeoversArray = data.data?.takeovers || data.takeovers || []
+        
+        if (!Array.isArray(takeoversArray)) {
+          throw new Error('Invalid response format: missing takeovers array')
+        }
+        
+        setTakeovers(takeoversArray)
+        
+      } catch (mainApiError) {
+        console.error('❌ Main API failed, trying simple endpoint:', mainApiError)
+        
+        // Fallback to simple endpoint
+        response = await fetch('/api/simple-takeovers', {
+          method: 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store'
+        })
+        
+        if (!response.ok) {
+          throw new Error(`Both APIs failed. Simple API: ${response.status} ${response.statusText}`)
+        }
+        
+        data = await response.json()
+        console.log('✅ Simple API successful:', data)
+        
+        if (!data.success) {
+          throw new Error(`Simple API error: ${data.error?.message || 'Unknown error'}`)
+        }
+        
+        const takeoversArray = data.takeovers || []
+        
+        if (!Array.isArray(takeoversArray)) {
+          throw new Error('Invalid response format from simple API')
+        }
+        
+        setTakeovers(takeoversArray)
+        
+        // Show a warning that we're using the fallback
+        toast({
+          title: "⚠️ Using Fallback API",
+          description: "Main API is having issues, using simplified endpoint",
+          duration: 5000
+        })
       }
-      
-      setTakeovers(data.takeovers || [])
       
       // Log debug info
       const now = Math.floor(Date.now() / 1000)
-      const readyCount = data.takeovers.filter((t: Takeover) => {
+      const currentTakeovers = data.data?.takeovers || data.takeovers || []
+      const readyCount = currentTakeovers.filter((t: Takeover) => {
         if (t.isFinalized) return false
-        const endTime = parseInt(t.endTime)
-        const totalContributed = BigInt(t.totalContributed)
-        const minAmount = BigInt(t.minAmount)
-        return totalContributed >= minAmount || now >= endTime
+        const endTime = safeParseInt(t.endTime)
+        const totalContributed = safeParseInt(t.totalContributed)
+        const minAmount = safeParseInt(t.minAmount)
+        const isGoalMet = totalContributed >= minAmount
+        const isExpired = endTime > 0 && now >= endTime
+        return isGoalMet || isExpired
       }).length
       
-      console.log(`✅ Loaded ${data.takeovers.length} takeovers, ${readyCount} ready for finalization`)
-      console.log(`🏊 Pool simulations auto-created for ${processedCount} successful takeovers`)
+      console.log(`✅ Loaded ${currentTakeovers.length} takeovers, ${readyCount} ready for finalization`)
       
     } catch (error: any) {
       console.error('❌ Error fetching takeovers:', error)
       setError(error.message)
       toast({
         title: "Error Loading Takeovers",
-        description: error.message,
+        description: `${error.message} - Check console for details`,
         variant: "destructive"
       })
     } finally {
@@ -156,7 +299,7 @@ export function TakeoversList() {
     )
   }
 
-  // Count different statuses for debugging
+  // Count different statuses for debugging with corrected logic
   const now = Math.floor(Date.now() / 1000)
   const statusCounts = {
     finalized: takeovers.filter(t => t.isFinalized).length,
@@ -164,12 +307,28 @@ export function TakeoversList() {
     failed: takeovers.filter(t => t.isFinalized && !t.isSuccessful).length,
     readyToFinalize: takeovers.filter(t => {
       if (t.isFinalized) return false
-      const endTime = parseInt(t.endTime)
-      const totalContributed = BigInt(t.totalContributed)
-      const minAmount = BigInt(t.minAmount)
-      return totalContributed >= minAmount || now >= endTime
+      const endTime = safeParseInt(t.endTime)
+      const totalContributed = safeParseInt(t.totalContributed)
+      const minAmount = safeParseInt(t.minAmount)
+      const isGoalMet = totalContributed >= minAmount
+      const isExpired = endTime > 0 && now >= endTime
+      return isGoalMet || isExpired
     }).length,
-    active: takeovers.filter(t => !t.isFinalized && t.status === 'active').length,
+    active: takeovers.filter(t => {
+      if (t.isFinalized) return false
+      const endTime = safeParseInt(t.endTime)
+      const totalContributed = safeParseInt(t.totalContributed)
+      const minAmount = safeParseInt(t.minAmount)
+      const isGoalMet = totalContributed >= minAmount
+      const hasTimeLeft = endTime === 0 || now < endTime
+      return hasTimeLeft && !isGoalMet
+    }).length,
+    goalReached: takeovers.filter(t => {
+      if (t.isFinalized) return false
+      const totalContributed = safeParseInt(t.totalContributed)
+      const minAmount = safeParseInt(t.minAmount)
+      return totalContributed >= minAmount
+    }).length,
     withPools: takeovers.filter(t => t.isFinalized && t.isSuccessful && t.v2TokenMint).length
   }
 
@@ -240,7 +399,7 @@ export function TakeoversList() {
             <CardTitle className="text-lg">🐛 Debug Information</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-6 gap-4 text-sm">
+            <div className="grid grid-cols-2 md:grid-cols-7 gap-4 text-sm">
               <div>
                 <div className="font-medium">Total</div>
                 <div className="text-lg">{takeovers.length}</div>
@@ -248,6 +407,10 @@ export function TakeoversList() {
               <div>
                 <div className="font-medium">Active</div>
                 <div className="text-lg text-green-600">{statusCounts.active}</div>
+              </div>
+              <div>
+                <div className="font-medium">Goal Reached</div>
+                <div className="text-lg text-purple-600">{statusCounts.goalReached}</div>
               </div>
               <div>
                 <div className="font-medium">Ready to Finalize</div>
@@ -276,13 +439,24 @@ export function TakeoversList() {
       )}
       
       <div className="grid gap-6">
-        {takeovers.map((takeover) => {
+        {takeovers.map((takeover: Takeover) => {
           const now = Math.floor(Date.now() / 1000)
-          const endTime = parseInt(takeover.endTime)
-          const isActive = takeover.status === 'active'
-          const isEnded = takeover.status === 'ended'
-          const isGoalReached = takeover.status === 'goal_reached'
+          const endTime = safeParseInt(takeover.endTime)
           const isFinalized = takeover.isFinalized
+          
+          // Calculate goal status
+          const totalContributed = safeParseInt(takeover.totalContributed)
+          const minAmount = safeParseInt(takeover.minAmount)
+          const isGoalMet = totalContributed >= minAmount
+          
+          // Calculate time status
+          const hasTimeLeft = endTime === 0 || now < endTime
+          const isExpired = endTime > 0 && now >= endTime
+          
+          // Determine actual status based on conditions
+          const isActive = !isFinalized && hasTimeLeft && !isGoalMet
+          const isGoalReached = !isFinalized && isGoalMet
+          const isEnded = !isFinalized && isExpired && !isGoalMet
 
           // Format time remaining
           let timeLeft = ""
@@ -345,7 +519,15 @@ export function TakeoversList() {
                         <span className="font-mono text-xs">{takeover.v1_token_mint.slice(0, 8)}...{takeover.v1_token_mint.slice(-4)}</span>
                         {debugMode && (
                           <div className="text-xs mt-1">
-                            ID: {takeover.id} | Status: {takeover.status} | Authority: {takeover.authority.slice(0, 4)}...
+                            ID: {takeover.id} | API Status: {takeover.status} | Calculated: {
+                              isFinalized ? (takeover.isSuccessful ? 'successful' : 'failed') :
+                              isGoalReached ? 'goal_reached' :
+                              isActive ? 'active' : 
+                              isEnded ? 'ended' : 'unknown'
+                            }
+                            <br />Authority: {takeover.authority.slice(0, 4)}...
+                            <br />Goal: {totalContributed.toLocaleString()} / {minAmount.toLocaleString()} ({isGoalMet ? 'MET' : 'NOT MET'})
+                            <br />Time: {endTime > 0 ? `ends ${new Date(endTime * 1000).toLocaleString()}` : 'no deadline'} ({hasTimeLeft ? 'TIME LEFT' : 'EXPIRED'})
                             {takeover.finalize_tx && (
                               <div>Finalize TX: {takeover.finalize_tx.slice(0, 8)}...</div>
                             )}
@@ -359,10 +541,10 @@ export function TakeoversList() {
                   </div>
                   <div className="flex flex-col items-end gap-2">
                     <span className={`text-xs px-3 py-1 rounded-full ${statusColor}`}>
-                      {isActive ? "🟢 Active" : 
+                      {isFinalized ? (takeover.isSuccessful ? "✅ Success" : "❌ Failed") :
                        isGoalReached ? "🎯 Goal Reached" :
-                       isEnded ? "⏰ Ended" : 
-                       timeLeft.includes("✅") ? "✅ Success" : "❌ Failed"}
+                       isActive ? "🟢 Active" : 
+                       isEnded ? "⏰ Ended" : "⏸️ Unknown"}
                     </span>
                     {takeover.isFinalized && takeover.isSuccessful && takeover.v2TokenMint && (
                       <Link href="/pools">
@@ -385,14 +567,14 @@ export function TakeoversList() {
                     <div className="flex justify-between text-sm">
                       <span className="font-medium">Funding Progress</span>
                       <span className="text-gray-600">
-                        {(parseInt(takeover.totalContributed) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} / {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}
+                        {(safeParseInt(takeover.totalContributed) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} / {(safeParseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}
                       </span>
                     </div>
                     <div className="space-y-1">
-                      <Progress value={takeover.progressPercentage} className="h-2" />
+                      <Progress value={safeFormat(takeover.progressPercentage, 1)} className="h-2" />
                       <div className="flex justify-between text-xs text-gray-500">
-                        <span>{takeover.progressPercentage.toFixed(1)}% complete</span>
-                        <span>Goal: {(parseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
+                        <span>{safeFormat(takeover.progressPercentage, 1)}% complete</span>
+                        <span>Goal: {(safeParseInt(takeover.minAmount) / 1_000_000).toLocaleString()} {takeover.tokenName}</span>
                       </div>
                     </div>
                   </div>
@@ -405,11 +587,11 @@ export function TakeoversList() {
                     </div>
                     <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Contributors</div>
-                      <div className="text-sm font-medium">{takeover.contributorCount}</div>
+                      <div className="text-sm font-medium">{takeover.contributorCount || 0}</div>
                     </div>
                     <div className="bg-gray-50 dark:bg-gray-800 p-3 rounded-lg text-center">
                       <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">Reward Rate</div>
-                      <div className="text-sm font-medium">{takeover.customRewardRate}x</div>
+                      <div className="text-sm font-medium">{safeFormat(takeover.customRewardRate, 1)}x</div>
                     </div>
                   </div>
 

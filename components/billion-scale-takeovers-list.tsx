@@ -18,61 +18,64 @@ export function BillionScaleTakeoversList() {
   const { toast } = useToast()
 
   const fetchTakeovers = async () => {
-    try {
-      setLoading(true)
-      setError(null)
-      
-      console.log('🔄 Fetching billion-scale takeovers...')
-      
-      const response = await fetch('/api/takeovers', {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-        cache: 'no-store'
-      })
-      
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`)
-      }
-      
-      const data = await response.json()
-      console.log('📊 Received takeovers data:', data)
-      
-      if (!data.takeovers || !Array.isArray(data.takeovers)) {
-        throw new Error('Invalid response format: missing takeovers array')
-      }
-      
-      setTakeovers(data.takeovers || [])
-      
-      // Log debug info for billion-scale features
-      const now = Math.floor(Date.now() / 1000)
-      const readyCount = data.takeovers.filter((t: Takeover) => {
-        if (t.isFinalized) return false
-        const endTime = parseInt(t.endTime)
-        const totalContributed = BigInt(t.totalContributed)
-        const minAmount = BigInt(t.calculatedMinAmount || t.minAmount)
-        return totalContributed >= minAmount || now >= endTime
-      }).length
-      
-      const billionScaleCount = data.takeovers.filter((t: Takeover) => 
-        t.rewardRateBp && t.v1TotalSupply && t.calculatedMinAmount
-      ).length
-      
-      console.log(`✅ Loaded ${data.takeovers.length} takeovers`)
-      console.log(`🛡️ ${billionScaleCount} billion-scale takeovers with conservative safety features`)
-      console.log(`⚡ ${readyCount} ready for finalization`)
-      
-    } catch (error: any) {
-      console.error('❌ Error fetching takeovers:', error)
-      setError(error.message)
-      toast({
-        title: "Error Loading Takeovers",
-        description: error.message,
-        variant: "destructive"
-      })
-    } finally {
-      setLoading(false)
+  try {
+    setLoading(true)
+    setError(null)
+    
+    console.log('🔄 Fetching billion-scale takeovers...')
+    
+    const response = await fetch('/api/takeovers', {
+      method: 'GET',
+      headers: { 'Content-Type': 'application/json' },
+      cache: 'no-store'
+    })
+    
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`)
     }
+    
+    const data = await response.json()
+    console.log('📊 Received takeovers data:', data)
+    
+    // FIX: Access the nested takeovers array correctly
+    const takeoversArray = data.data?.takeovers || data.takeovers || []
+    
+    if (!Array.isArray(takeoversArray)) {
+      throw new Error('Invalid response format: missing takeovers array')
+    }
+    
+    setTakeovers(takeoversArray)
+    
+    // Log debug info for billion-scale features
+    const now = Math.floor(Date.now() / 1000)
+    const readyCount = takeoversArray.filter((t: Takeover) => {
+      if (t.isFinalized) return false
+      const endTime = parseInt(t.endTime)
+      const totalContributed = BigInt(t.totalContributed)
+      const minAmount = BigInt(t.calculatedMinAmount || t.minAmount)
+      return totalContributed >= minAmount || now >= endTime
+    }).length
+    
+    const billionScaleCount = takeoversArray.filter((t: Takeover) => 
+      t.rewardRateBp && t.v1TotalSupply && t.calculatedMinAmount
+    ).length
+    
+    console.log(`✅ Loaded ${takeoversArray.length} takeovers`)
+    console.log(`🛡️ ${billionScaleCount} billion-scale takeovers with conservative safety features`)
+    console.log(`⚡ ${readyCount} ready for finalization`)
+    
+  } catch (error: any) {
+    console.error('❌ Error fetching takeovers:', error)
+    setError(error.message)
+    toast({
+      title: "Error Loading Takeovers",
+      description: error.message,
+      variant: "destructive"
+    })
+  } finally {
+    setLoading(false)
   }
+}
 
   useEffect(() => {
     fetchTakeovers()
