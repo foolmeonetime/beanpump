@@ -35,7 +35,7 @@ export async function GET(request: NextRequest) {
     'end_time',
     'custom_reward_rate',
     'reward_rate_bp',
-    'target_participation_bp',
+    'token_amount_target',
     'v1_market_price_lamports',
     'calculated_min_amount',
     'max_safe_total_contribution',

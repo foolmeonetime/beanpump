@@ -1,6 +1,5 @@
-// lib/services/takeover-service.ts - Complete service for your bigint schema
 import { PoolClient } from 'pg';
-import { ApiError, NotFoundError } from '@/lib/middleware/error-handler';
+import { ApiError, NotFoundError } from '../middleware/error-handler';
 
 export interface TakeoverFilters {
   authority?: string;
@@ -15,24 +14,29 @@ export interface CreateTakeoverData {
   authority: string;
   v1_token_mint: string;
   vault: string;
-  min_amount?: string | number;
-  start_time?: string | number;
-  end_time?: string | number;
+  min_amount?: string | number | null;
+  start_time?: string | number | null;
+  end_time?: string | number | null;
   custom_reward_rate?: number;
   token_name?: string;
   image_url?: string;
+  has_v2_mint?: boolean;
   v2_token_mint?: string;
-  v1_total_supply?: string | number;
+  v1_total_supply?: string | number | null;
+  v2_total_supply?: string | number | null;
   reward_rate_bp?: number;
-  calculated_min_amount?: string | number;
-  max_safe_total_contribution?: string | number;
-  target_participation_bp?: number;
-  v1_market_price_lamports?: string | number;
-  sol_for_liquidity?: string | number;
+  // UPDATED: Use token_amount_target instead of target_participation_bp
+  token_amount_target?: string | number | null;
+  calculated_min_amount?: string | number | null;
+  max_safe_total_contribution?: string | number | null;
+  v1_market_price_lamports?: string | number | null;
+  sol_for_liquidity?: string | number | null;
+  reward_pool_tokens?: string | number | null;
+  liquidity_pool_tokens?: string | number | null;
 }
 
 export interface UpdateTakeoverData {
-  total_contributed?: string | number;
+  total_contributed?: string | number | null;
   contributor_count?: number;
   is_finalized?: boolean;
   is_successful?: boolean;
@@ -41,14 +45,16 @@ export interface UpdateTakeoverData {
   image_url?: string;
   has_v2_mint?: boolean;
   v2_token_mint?: string;
-  v2_total_supply?: string | number;
-  reward_pool_tokens?: string | number;
-  liquidity_pool_tokens?: string | number;
+  v2_total_supply?: string | number | null;
+  reward_pool_tokens?: string | number | null;
+  liquidity_pool_tokens?: string | number | null;
   participation_rate_bp?: number;
   final_safety_utilization?: number;
   final_reward_rate?: number;
   jupiter_swap_completed?: boolean;
   lp_created?: boolean;
+  // UPDATED: Support token amount target updates
+  token_amount_target?: string | number | null;
 }
 
 /**
@@ -70,13 +76,17 @@ function convertBigIntFields(row: any): any {
     reward_pool_tokens: row.reward_pool_tokens?.toString(),
     liquidity_pool_tokens: row.liquidity_pool_tokens?.toString(),
     sol_for_liquidity: row.sol_for_liquidity?.toString(),
+    // UPDATED: Convert token amount target
+    token_amount_target: row.token_amount_target?.toString() || '0',
+    // Keep backwards compatibility - map token_amount_target to minAmount for UI
+    minAmount: row.token_amount_target?.toString() || row.calculated_min_amount?.toString() || row.min_amount?.toString() || '0',
   };
 }
 
 /**
- * Convert input values to appropriate database types
+ * Convert input values to appropriate database types - FIXED type safety
  */
-function prepareBigIntValue(value: string | number | undefined | null): bigint | null {
+function prepareBigIntValue(value: string | number | null | undefined): bigint | null {
   if (value === undefined || value === null || value === '') {
     return null;
   }
@@ -85,6 +95,39 @@ function prepareBigIntValue(value: string | number | undefined | null): bigint |
   } catch {
     return null;
   }
+}
+
+/**
+ * Calculate token amount target from legacy target_participation_bp - FIXED type safety
+ */
+function calculateTokenAmountTarget(
+  v1TotalSupply: string | number | null | undefined,
+  targetParticipationBp?: number,
+  calculatedMinAmount?: string | number | null | undefined,
+  minAmount?: string | number | null | undefined
+): bigint {
+  // Priority 1: Use calculated min amount if available
+  if (calculatedMinAmount !== undefined && calculatedMinAmount !== null) {
+    const calculated = prepareBigIntValue(calculatedMinAmount);
+    if (calculated && calculated > 0n) return calculated;
+  }
+  
+  // Priority 2: Calculate from total supply and participation BP
+  if (v1TotalSupply !== undefined && v1TotalSupply !== null && targetParticipationBp && targetParticipationBp > 0) {
+    const totalSupply = prepareBigIntValue(v1TotalSupply);
+    if (totalSupply && totalSupply > 0n) {
+      return totalSupply * BigInt(targetParticipationBp) / 10000n;
+    }
+  }
+  
+  // Priority 3: Use min amount if available
+  if (minAmount !== undefined && minAmount !== null) {
+    const min = prepareBigIntValue(minAmount);
+    if (min && min > 0n) return min;
+  }
+  
+  // Default: 1M tokens
+  return 1000000n;
 }
 
 export class TakeoverService {
@@ -102,7 +145,7 @@ export class TakeoverService {
           is_finalized, is_successful, has_v2_mint, v2_token_mint, v2_total_supply,
           custom_reward_rate, token_name, image_url, v1_total_supply,
           reward_pool_tokens, liquidity_pool_tokens, reward_rate_bp, 
-          target_participation_bp, calculated_min_amount, max_safe_total_contribution,
+          token_amount_target, calculated_min_amount, max_safe_total_contribution,
           v1_market_price_lamports, sol_for_liquidity, jupiter_swap_completed,
           lp_created, participation_rate_bp, final_safety_utilization,
           final_reward_rate, created_at, updated_at
@@ -180,8 +223,24 @@ export class TakeoverService {
 
       console.log(`✅ Retrieved ${result.rows.length} takeovers in ${queryEnd - queryStart}ms`);
       
-      // Convert bigint values to strings for JavaScript compatibility
-      return result.rows.map(convertBigIntFields);
+      // Convert bigint values to strings and add legacy compatibility
+      return result.rows.map(row => {
+        const processed = convertBigIntFields(row);
+        
+        // UPDATED: Enhanced goal checking using token_amount_target
+        const totalContributed = BigInt(processed.total_contributed || '0');
+        const tokenTarget = BigInt(processed.token_amount_target || '0');
+        const calculatedMin = BigInt(processed.calculated_min_amount || '0');
+        
+        // Use token_amount_target as primary goal, fall back to calculated_min_amount
+        const goalAmount = tokenTarget > 0n ? tokenTarget : calculatedMin;
+        processed.isGoalMet = totalContributed >= goalAmount;
+        processed.progressPercent = goalAmount > 0n 
+          ? Math.min(100, Number(totalContributed * 100n / goalAmount))
+          : 0;
+        
+        return processed;
+      });
       
     } catch (error: any) {
       console.error('💥 TakeoverService.getTakeovers failed:');
@@ -209,7 +268,7 @@ export class TakeoverService {
           is_finalized, is_successful, has_v2_mint, v2_token_mint, v2_total_supply,
           custom_reward_rate, token_name, image_url, v1_total_supply,
           reward_pool_tokens, liquidity_pool_tokens, reward_rate_bp, 
-          target_participation_bp, calculated_min_amount, max_safe_total_contribution,
+          token_amount_target, calculated_min_amount, max_safe_total_contribution,
           v1_market_price_lamports, sol_for_liquidity, jupiter_swap_completed,
           lp_created, participation_rate_bp, final_safety_utilization,
           final_reward_rate, created_at, updated_at
@@ -230,11 +289,24 @@ export class TakeoverService {
       const takeover = result.rows[0];
       const processedTakeover = convertBigIntFields(takeover);
       
+      // Add goal checking logic
+      const totalContributed = BigInt(processedTakeover.total_contributed || '0');
+      const tokenTarget = BigInt(processedTakeover.token_amount_target || '0');
+      const calculatedMin = BigInt(processedTakeover.calculated_min_amount || '0');
+      
+      const goalAmount = tokenTarget > 0n ? tokenTarget : calculatedMin;
+      processedTakeover.isGoalMet = totalContributed >= goalAmount;
+      processedTakeover.progressPercent = goalAmount > 0n 
+        ? Math.min(100, Number(totalContributed * 100n / goalAmount))
+        : 0;
+      
       console.log(`✅ Found takeover in ${queryEnd - queryStart}ms:`, {
         id: processedTakeover.id,
         address: processedTakeover.address,
         tokenName: processedTakeover.token_name,
-        isFinalized: processedTakeover.is_finalized
+        isFinalized: processedTakeover.is_finalized,
+        isGoalMet: processedTakeover.isGoalMet,
+        tokenTarget: processedTakeover.token_amount_target
       });
 
       return processedTakeover;
@@ -251,24 +323,35 @@ export class TakeoverService {
   }
 
   /**
-   * Create a new takeover
+   * Create a new takeover with token amount target - FIXED type safety
    */
   static async createTakeover(db: PoolClient, data: CreateTakeoverData) {
     console.log('💾 TakeoverService.createTakeover called with data:', {
       address: data.address,
       authority: data.authority,
       tokenName: data.token_name,
+      tokenAmountTarget: data.token_amount_target,
     });
     
     try {
+      // UPDATED: Calculate token amount target if not provided - FIXED type safety
+      const tokenAmountTarget = data.token_amount_target !== undefined && data.token_amount_target !== null
+        ? prepareBigIntValue(data.token_amount_target)
+        : calculateTokenAmountTarget(
+            data.v1_total_supply,
+            undefined, // No longer using target_participation_bp
+            data.calculated_min_amount,
+            data.min_amount
+          );
+
       const query = `
         INSERT INTO takeovers (
           address, authority, v1_token_mint, vault, min_amount,
           start_time, end_time, total_contributed, contributor_count,
           is_finalized, is_successful, has_v2_mint, custom_reward_rate, 
           token_name, image_url, v2_token_mint, v1_total_supply,
-          reward_rate_bp, calculated_min_amount, max_safe_total_contribution,
-          target_participation_bp, v1_market_price_lamports, sol_for_liquidity
+          reward_rate_bp, token_amount_target, calculated_min_amount, max_safe_total_contribution,
+          v1_market_price_lamports, sol_for_liquidity
         ) VALUES (
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23
         )
@@ -294,14 +377,15 @@ export class TakeoverService {
         data.v2_token_mint,
         prepareBigIntValue(data.v1_total_supply),
         data.reward_rate_bp,
-        prepareBigIntValue(data.calculated_min_amount),
+        tokenAmountTarget, // UPDATED: Use calculated token amount target
+        tokenAmountTarget, // Set calculated_min_amount to same value for consistency
         prepareBigIntValue(data.max_safe_total_contribution),
-        data.target_participation_bp,
         prepareBigIntValue(data.v1_market_price_lamports),
         prepareBigIntValue(data.sol_for_liquidity) || 0n,
       ];
       
       console.log('🔄 Executing createTakeover query...');
+      console.log('Token amount target:', tokenAmountTarget?.toString());
       const queryStart = Date.now();
       const result = await db.query(query, params);
       const queryEnd = Date.now();
@@ -313,6 +397,7 @@ export class TakeoverService {
         id: processedTakeover.id,
         address: processedTakeover.address,
         tokenName: processedTakeover.token_name,
+        tokenAmountTarget: processedTakeover.token_amount_target,
       });
       
       return processedTakeover;
@@ -321,149 +406,98 @@ export class TakeoverService {
       console.error('💥 TakeoverService.createTakeover failed:');
       console.error('Error:', error.message);
       console.error('Stack:', error.stack);
-      
-      // Handle specific database errors
-      if (error.code === '23505') { // Unique constraint violation
-        throw new ApiError('Takeover with this address already exists', 'DUPLICATE_ADDRESS');
-      }
-      
       throw new ApiError(`Failed to create takeover: ${error.message}`, 'DATABASE_ERROR');
     }
   }
 
   /**
-   * Update takeover data
+   * Update an existing takeover - FIXED type safety
    */
   static async updateTakeover(db: PoolClient, address: string, data: UpdateTakeoverData) {
     console.log('🔄 TakeoverService.updateTakeover called for:', address);
-    console.log('📝 Update data:', data);
+    console.log('Update data:', data);
     
     try {
       // Build dynamic update query
       const updateFields: string[] = [];
       const params: any[] = [];
-      let paramCount = 1;
-      
-      // Add address as the first parameter
-      params.push(address);
-      paramCount++;
-      
-      // Build update fields dynamically
-      if (data.total_contributed !== undefined) {
-        updateFields.push(`total_contributed = $${paramCount++}`);
-        params.push(prepareBigIntValue(data.total_contributed));
-      }
-      
-      if (data.contributor_count !== undefined) {
-        updateFields.push(`contributor_count = $${paramCount++}`);
-        params.push(data.contributor_count);
-      }
-      
-      if (data.is_finalized !== undefined) {
-        updateFields.push(`is_finalized = $${paramCount++}`);
-        params.push(data.is_finalized);
-      }
-      
-      if (data.is_successful !== undefined) {
-        updateFields.push(`is_successful = $${paramCount++}`);
-        params.push(data.is_successful);
-      }
-      
-      if (data.custom_reward_rate !== undefined) {
-        updateFields.push(`custom_reward_rate = $${paramCount++}`);
-        params.push(data.custom_reward_rate);
-      }
-      
-      if (data.token_name !== undefined) {
-        updateFields.push(`token_name = $${paramCount++}`);
-        params.push(data.token_name);
-      }
-      
-      if (data.image_url !== undefined) {
-        updateFields.push(`image_url = $${paramCount++}`);
-        params.push(data.image_url);
-      }
-      
-      if (data.has_v2_mint !== undefined) {
-        updateFields.push(`has_v2_mint = $${paramCount++}`);
-        params.push(data.has_v2_mint);
-      }
-      
-      if (data.v2_token_mint !== undefined) {
-        updateFields.push(`v2_token_mint = $${paramCount++}`);
-        params.push(data.v2_token_mint);
-      }
-      
-      if (data.v2_total_supply !== undefined) {
-        updateFields.push(`v2_total_supply = $${paramCount++}`);
-        params.push(prepareBigIntValue(data.v2_total_supply));
-      }
-      
-      if (data.reward_pool_tokens !== undefined) {
-        updateFields.push(`reward_pool_tokens = $${paramCount++}`);
-        params.push(prepareBigIntValue(data.reward_pool_tokens));
-      }
-      
-      if (data.liquidity_pool_tokens !== undefined) {
-        updateFields.push(`liquidity_pool_tokens = $${paramCount++}`);
-        params.push(prepareBigIntValue(data.liquidity_pool_tokens));
-      }
-      
-      if (data.participation_rate_bp !== undefined) {
-        updateFields.push(`participation_rate_bp = $${paramCount++}`);
-        params.push(data.participation_rate_bp);
-      }
-      
-      if (data.final_safety_utilization !== undefined) {
-        updateFields.push(`final_safety_utilization = $${paramCount++}`);
-        params.push(data.final_safety_utilization);
-      }
-      
-      if (data.final_reward_rate !== undefined) {
-        updateFields.push(`final_reward_rate = $${paramCount++}`);
-        params.push(data.final_reward_rate);
-      }
-      
-      if (data.jupiter_swap_completed !== undefined) {
-        updateFields.push(`jupiter_swap_completed = $${paramCount++}`);
-        params.push(data.jupiter_swap_completed);
-      }
-      
-      if (data.lp_created !== undefined) {
-        updateFields.push(`lp_created = $${paramCount++}`);
-        params.push(data.lp_created);
-      }
-      
+      let paramIndex = 1;
+
+      // Helper function to add update field - FIXED type safety
+      const addField = (field: string, value: any, transformer?: (val: any) => any) => {
+        if (value !== undefined) {
+          updateFields.push(`${field} = $${paramIndex}`);
+          params.push(transformer ? transformer(value) : value);
+          paramIndex++;
+        }
+      };
+
+      // Add all possible update fields
+      addField('total_contributed', data.total_contributed, prepareBigIntValue);
+      addField('contributor_count', data.contributor_count);
+      addField('is_finalized', data.is_finalized);
+      addField('is_successful', data.is_successful);
+      addField('custom_reward_rate', data.custom_reward_rate);
+      addField('token_name', data.token_name);
+      addField('image_url', data.image_url);
+      addField('has_v2_mint', data.has_v2_mint);
+      addField('v2_token_mint', data.v2_token_mint);
+      addField('v2_total_supply', data.v2_total_supply, prepareBigIntValue);
+      addField('reward_pool_tokens', data.reward_pool_tokens, prepareBigIntValue);
+      addField('liquidity_pool_tokens', data.liquidity_pool_tokens, prepareBigIntValue);
+      addField('participation_rate_bp', data.participation_rate_bp);
+      addField('final_safety_utilization', data.final_safety_utilization);
+      addField('final_reward_rate', data.final_reward_rate);
+      addField('jupiter_swap_completed', data.jupiter_swap_completed);
+      addField('lp_created', data.lp_created);
+      // UPDATED: Support token amount target updates
+      addField('token_amount_target', data.token_amount_target, prepareBigIntValue);
+
       if (updateFields.length === 0) {
-        throw new ApiError('No update data provided', 'VALIDATION_ERROR');
+        throw new ApiError('No valid fields to update', 'VALIDATION_ERROR');
       }
-      
+
+      // Always update the updated_at timestamp
+      updateFields.push(`updated_at = NOW()`);
+
       const query = `
         UPDATE takeovers 
-        SET ${updateFields.join(', ')}, updated_at = NOW()
-        WHERE address = $1
+        SET ${updateFields.join(', ')}
+        WHERE address = $${paramIndex}
         RETURNING *
       `;
-      
+      params.push(address);
+
       console.log('🔄 Executing updateTakeover query...');
-      console.log('Query:', query.replace(/\s+/g, ' ').trim());
-      console.log('Params length:', params.length);
-      
+      console.log('Fields to update:', updateFields);
       const queryStart = Date.now();
       const result = await db.query(query, params);
       const queryEnd = Date.now();
-      
+
       if (result.rows.length === 0) {
         throw new NotFoundError(`Takeover not found with address: ${address}`);
       }
-      
+
       const updatedTakeover = result.rows[0];
       const processedTakeover = convertBigIntFields(updatedTakeover);
+      
+      // Add goal checking logic
+      const totalContributed = BigInt(processedTakeover.total_contributed || '0');
+      const tokenTarget = BigInt(processedTakeover.token_amount_target || '0');
+      const calculatedMin = BigInt(processedTakeover.calculated_min_amount || '0');
+      
+      const goalAmount = tokenTarget > 0n ? tokenTarget : calculatedMin;
+      processedTakeover.isGoalMet = totalContributed >= goalAmount;
+      processedTakeover.progressPercent = goalAmount > 0n 
+        ? Math.min(100, Number(totalContributed * 100n / goalAmount))
+        : 0;
       
       console.log(`✅ Updated takeover in ${queryEnd - queryStart}ms:`, {
         id: processedTakeover.id,
         address: processedTakeover.address,
         fieldsUpdated: updateFields.length,
+        isGoalMet: processedTakeover.isGoalMet,
+        tokenTarget: processedTakeover.token_amount_target
       });
       
       return processedTakeover;
@@ -494,7 +528,8 @@ export class TakeoverService {
           COUNT(*) FILTER (WHERE is_finalized = true AND is_successful = false) as failed_takeovers,
           COALESCE(SUM(total_contributed), 0) as total_contributed,
           COALESCE(SUM(contributor_count), 0) as total_contributors,
-          AVG(custom_reward_rate) as avg_reward_rate
+          AVG(custom_reward_rate) as avg_reward_rate,
+          COALESCE(SUM(CAST(token_amount_target AS BIGINT)), 0) as total_token_targets
         FROM takeovers
       `;
       
@@ -514,6 +549,7 @@ export class TakeoverService {
         totalContributed: stats.total_contributed.toString(),
         totalContributors: parseInt(stats.total_contributors),
         avgRewardRate: parseFloat(stats.avg_reward_rate) || 0,
+        totalTokenTargets: stats.total_token_targets.toString(),
       };
       
     } catch (error: any) {
