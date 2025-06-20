@@ -186,4 +186,5 @@ function addToRemoveQueue(toastId: string) {
   toastTimeouts.set(toastId, timeout)
 }
 
+// Export the useToast function - this was missing!
 export { useToast, toast }
