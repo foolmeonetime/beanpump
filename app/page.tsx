@@ -224,7 +224,7 @@ export default function HomePage() {
               Welcome back! 👋
             </h1>
             <p className="text-gray-600 dark:text-gray-300">
-              Here's what's happening with your takeovers today.
+              Here&apos;s what&apos;s happening with your takeovers today.
             </p>
           </div>
         )}
@@ -360,60 +360,38 @@ export default function HomePage() {
               </Card>
             )}
 
-            {/* Getting Started Guide */}
+            {/* Help / Info */}
             <Card>
               <CardHeader>
-                <CardTitle>Getting Started</CardTitle>
+                <CardTitle>How It Works</CardTitle>
                 <CardDescription>
-                  New to takeovers? Learn the basics
+                  Takeovers allow communities to collectively gain control over SPL tokens by pooling funds.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-3">
-                <div className="space-y-2">
-                  <h4 className="font-medium text-sm">1. Connect Your Wallet</h4>
+              <CardContent className="space-y-4">
+                <div>
+                  <h4 className="font-medium text-sm">1. Browse Takeovers</h4>
                   <p className="text-xs text-muted-foreground">
-                    Use Phantom, Solflare, or any Solana wallet
+                    Explore existing community takeovers or create your own.
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <h4 className="font-medium text-sm">2. Browse Takeovers</h4>
+                <div>
+                  <h4 className="font-medium text-sm">2. Connect Wallet</h4>
                   <p className="text-xs text-muted-foreground">
-                    Find active takeover campaigns to participate in
+                    Connect your Solana wallet to contribute and claim rewards.
                   </p>
                 </div>
-                <div className="space-y-2">
+                <div>
                   <h4 className="font-medium text-sm">3. Contribute Tokens</h4>
                   <p className="text-xs text-muted-foreground">
-                    Contribute V1 tokens to receive V2 rewards
+                    Contribute V1 tokens to receive V2 rewards.
                   </p>
                 </div>
-                <div className="space-y-2">
-                  <h4 className="font-medium text-sm">4. Claim Rewards</h4>
+                <div>
+                  <h4 className="font-medium text-sm">4. Finalize Takeover</h4>
                   <p className="text-xs text-muted-foreground">
-                    Claim your V2 tokens when takeover succeeds
+                    Once ready, the takeover is finalized, and V2 tokens are minted.
                   </p>
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* Recent Activity */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Recent Activity</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="space-y-3 text-sm">
-                  {[
-                    { action: 'BONK takeover finalized', time: '2 hours ago' },
-                    { action: 'New WIF takeover created', time: '4 hours ago' },
-                    { action: 'SAMO takeover funded', time: '6 hours ago' },
-                    { action: 'COPE takeover completed', time: '1 day ago' },
-                  ].map((activity, index) => (
-                    <div key={index} className="flex justify-between items-center py-2 border-b border-gray-100 last:border-0">
-                      <span className="text-gray-700 dark:text-gray-300">{activity.action}</span>
-                      <span className="text-xs text-muted-foreground">{activity.time}</span>
-                    </div>
-                  ))}
                 </div>
               </CardContent>
             </Card>

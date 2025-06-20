@@ -325,7 +325,7 @@ export default function ClaimPage({ params }: ClaimPageProps) {
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don&apos;t have any claimable contributions for this billion-scale takeover.
+              You don't have any claimable contributions for this billion-scale takeover.
             </p>
             <Link href="/">
               <Button>Back to Takeovers</Button>

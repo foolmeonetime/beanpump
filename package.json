@@ -11,7 +11,9 @@
     "type-check": "tsc --noEmit",
     "test": "jest",
     "db:migrate": "node scripts/migrate.js",
-    "db:seed": "node scripts/seed.js"
+    "db:seed": "node scripts/seed.js",
+    "fix-apost": "node scripts/fix-apostrophes.js",
+    "undo-apost": "node scripts/undo-apostrophes.js"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.31.1",

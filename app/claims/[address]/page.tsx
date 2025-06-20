@@ -336,7 +336,7 @@ export default function ClaimPage() {
             <div className="text-6xl mb-4">🤷‍♂️</div>
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don&apos;t have any claimable contributions for this takeover.
+              You don't have any claimable contributions for this takeover.
             </p>
             <div className="space-x-2">
               <Link href={`/takeover/${takeoverAddress}`}>
