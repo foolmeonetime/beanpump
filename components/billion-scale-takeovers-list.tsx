@@ -213,7 +213,7 @@ export function BillionScaleTakeoversList() {
           <CardContent>
             <p className="text-sm text-gray-600 mb-4">
               {statusCounts.readyToFinalize} takeover{statusCounts.readyToFinalize !== 1 ? 's' : ''} ready for finalization. 
-              Takeover creators must manually finalize their campaigns when they're ready.
+              Takeover creators must manually finalize their campaigns when they&apos;re ready.
             </p>
             <div className="text-xs text-gray-500">
               💡 Each takeover can only be finalized by its creator (the authority who initialized it).

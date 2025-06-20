@@ -331,7 +331,7 @@ function TokenMinter() {
 
             <div className="p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
               <p className="text-sm text-blue-800 dark:text-blue-200">
-                💡 <strong>Tip:</strong> This will create a real token on Solana devnet. You'll need about 0.002 SOL for transaction fees.
+                💡 <strong>Tip:</strong> This will create a real token on Solana devnet. You&apos;ll need about 0.002 SOL for transaction fees.
               </p>
             </div>
 
