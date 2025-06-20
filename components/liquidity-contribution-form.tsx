@@ -249,7 +249,7 @@ export function LiquidityContributionForm({
               <>
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span className="text-blue-600 dark:text-blue-300">You'll Receive:</span>
+                    <span className="text-blue-600 dark:text-blue-300">You&apos;ll Receive:</span>
                     <div className="font-medium">
                       {formatTokenAmount(preview.expectedV2Allocation / 1_000_000)} V2
                     </div>

@@ -77,7 +77,7 @@ export default function HomePage() {
             <div className="text-4xl mb-4">⚡</div>
             <h3 className="text-lg font-semibold text-gray-900 mb-2">Fast</h3>
             <p className="text-gray-600 text-sm">
-              Powered by Solana's high-performance blockchain
+              Powered by Solana&apos;s high-performance blockchain
             </p>
           </div>
           

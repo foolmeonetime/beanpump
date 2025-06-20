@@ -474,7 +474,7 @@ export function WorkingContributionForm({
         ) : (
           <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
             <p className="text-gray-600 dark:text-gray-400 mb-2">Connect your wallet to contribute</p>
-            <p className="text-sm text-gray-500 dark:text-gray-500">You'll need {tokenName} tokens in your wallet</p>
+            <p className="text-sm text-gray-500 dark:text-gray-500">You&apos;ll need {tokenName} tokens in your wallet</p>
           </div>
         )}
       </CardContent>

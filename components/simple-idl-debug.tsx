@@ -7,7 +7,7 @@ export function SimpleIDLDebug() {
       <h3 className="font-bold mb-2">IDL Status:</h3>
       <div className="space-y-1">
         <p>IDL loaded: {idl ? '✅ Yes' : '❌ No'}</p>
-        <p>Program name: {idl?.metadata?.name || idl?.name || 'Unknown'}</p>
+        <p>Program name: {idl?.metadata?.name || 'Unknown'}</p>
         <p>Instructions count: {idl?.instructions?.length || 0}</p>
         {idl?.instructions && (
           <p>Available methods: {idl.instructions.map((i: any) => i.name).join(', ')}</p>

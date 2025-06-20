@@ -53,14 +53,11 @@ export function getProgram(connection: Connection, wallet: any) {
     }
   );
   
-  return new Program(
-    idl as any,
-    new PublicKey(PROGRAM_ID),
-    provider
-  );
+  // Anchor 0.31.1 with IDL containing address field
+  return new Program(idl as any, provider);
 }
 
-// PDA derivation functions (unchanged)
+// PDA derivation functions
 export async function findTakeoverPDA(authority: PublicKey, v1Mint: PublicKey) {
   return PublicKey.findProgramAddressSync(
     [
@@ -83,7 +80,7 @@ export async function findContributorPDA(takeover: PublicKey, contributor: Publi
   );
 }
 
-// New helper functions for billion-scale operations
+// Helper functions for billion-scale operations
 export function calculateParticipationRate(totalContributed: BN, v1TotalSupply: BN): number {
   if (v1TotalSupply.isZero()) return 0;
   return (totalContributed.mul(new BN(10000)).div(v1TotalSupply)).toNumber();

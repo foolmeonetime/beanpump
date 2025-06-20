@@ -262,3 +262,31 @@ export const EXPECTED_TAKEOVER_COLUMNS = [
   'is_finalized',
   'is_successful'
 ] as const;
+
+export const ClaimQuerySchema = z.object({
+  contributor: SolanaAddressSchema,
+  takeoverId: z.string().transform(Number).optional(),
+  takeover: SolanaAddressSchema.optional(),
+  status: z.enum(['claimed', 'unclaimed', 'all']).optional(),
+});
+
+export const ProcessClaimSchema = z.object({
+  contributionId: z.number().min(1),
+  contributor: SolanaAddressSchema,
+  takeoverAddress: SolanaAddressSchema,
+  transactionSignature: z.string().min(1),
+  claimAmount: z.string().regex(/^\d+$/, 'Must be a valid amount string'),
+  claimType: z.enum(['standard', 'liquidity_enhanced']).optional(),
+});
+
+// Finalize-related schemas
+export const FinalizeQuerySchema = z.object({
+  authority: SolanaAddressSchema.optional(),
+});
+
+export const FinalizeTakeoverSchema = z.object({
+  takeoverAddress: SolanaAddressSchema,
+  authority: SolanaAddressSchema,
+  isSuccessful: z.boolean(),
+  transactionSignature: z.string().min(1),
+});

@@ -56,60 +56,60 @@
   body {
     @apply bg-background text-foreground;
   }
-  
-  /* FIXED: Ensure proper contrast in both themes */
-  .text-gray-900 {
+}
+
+/* FIXED: Theme-aware utility classes with unique names to avoid circular dependencies */
+@layer utilities {
+  .text-adaptive-primary {
     @apply text-gray-900 dark:text-gray-100;
   }
   
-  .text-gray-800 {
+  .text-adaptive-secondary {
     @apply text-gray-800 dark:text-gray-200;
   }
   
-  .text-gray-700 {
+  .text-adaptive-tertiary {
     @apply text-gray-700 dark:text-gray-300;
   }
   
-  .text-gray-600 {
+  .text-adaptive-muted {
     @apply text-gray-600 dark:text-gray-400;
   }
   
-  .text-gray-500 {
+  .text-adaptive-subtle {
     @apply text-gray-500 dark:text-gray-500;
   }
   
   /* Card and container backgrounds */
-  .bg-white {
+  .bg-adaptive-primary {
     @apply bg-white dark:bg-gray-800;
   }
   
-  .bg-gray-50 {
+  .bg-adaptive-secondary {
     @apply bg-gray-50 dark:bg-gray-900;
   }
   
-  .bg-gray-100 {
+  .bg-adaptive-tertiary {
     @apply bg-gray-100 dark:bg-gray-800;
   }
   
   /* Border colors */
-  .border-gray-200 {
+  .border-adaptive-primary {
     @apply border-gray-200 dark:border-gray-700;
   }
   
-  .border-gray-300 {
+  .border-adaptive-secondary {
     @apply border-gray-300 dark:border-gray-600;
   }
-  
+}
+
+@layer components {
   /* Input styling for better visibility */
-  input[type="number"], 
-  input[type="text"], 
-  input[type="email"] {
+  .input-adaptive {
     @apply bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 border-gray-300 dark:border-gray-600;
   }
   
-  input[type="number"]:focus, 
-  input[type="text"]:focus, 
-  input[type="email"]:focus {
+  .input-adaptive:focus {
     @apply ring-2 ring-blue-500 dark:ring-blue-400 border-transparent;
   }
   
@@ -123,15 +123,15 @@
   }
   
   /* Table styling */
-  table {
+  .table-adaptive {
     @apply bg-white dark:bg-gray-800;
   }
   
-  th {
+  .table-header-adaptive {
     @apply bg-gray-50 dark:bg-gray-700 text-gray-900 dark:text-gray-100;
   }
   
-  td {
+  .table-cell-adaptive {
     @apply text-gray-900 dark:text-gray-100 border-gray-200 dark:border-gray-700;
   }
   
@@ -150,6 +150,29 @@
   
   .alert-info {
     @apply bg-blue-50 border-blue-200 text-blue-800 dark:bg-blue-900 dark:border-blue-700 dark:text-blue-200;
+  }
+  
+  /* Wallet button styling fixes */
+  .wallet-adapter-button {
+    @apply bg-purple-600 hover:bg-purple-700 text-white dark:bg-purple-500 dark:hover:bg-purple-600 !important;
+  }
+  
+  /* Status indicators */
+  .status-online {
+    @apply text-green-600 dark:text-green-400;
+  }
+  
+  .status-offline {
+    @apply text-red-600 dark:text-red-400;
+  }
+  
+  .status-warning {
+    @apply text-yellow-600 dark:text-yellow-400;
+  }
+  
+  /* Loading spinner */
+  .loading-spinner {
+    @apply text-blue-600 dark:text-blue-400;
   }
 }
 
@@ -183,27 +206,4 @@
     #374151 36%
   );
   background-size: 1000px 100%;
-}
-
-/* Ensure proper visibility for loading states */
-.loading-spinner {
-  @apply text-blue-600 dark:text-blue-400;
-}
-
-/* Wallet button styling fixes */
-.wallet-adapter-button {
-  @apply bg-purple-600 hover:bg-purple-700 text-white dark:bg-purple-500 dark:hover:bg-purple-600 !important;
-}
-
-/* Status indicators */
-.status-online {
-  @apply text-green-600 dark:text-green-400;
-}
-
-.status-offline {
-  @apply text-red-600 dark:text-red-400;
-}
-
-.status-warning {
-  @apply text-yellow-600 dark:text-yellow-400;
 }

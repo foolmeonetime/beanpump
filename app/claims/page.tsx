@@ -410,7 +410,7 @@ export default function ClaimsPage() {
             <div className="text-6xl mb-4">🎁</div>
             <h2 className="text-xl font-semibold mb-2">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don't have any claimable tokens yet. Participate in takeover campaigns to earn rewards!
+              You don&apos;t have any claimable tokens yet. Participate in takeover campaigns to earn rewards!
             </p>
             <Link href="/">
               <Button>Browse Takeovers</Button>

@@ -67,10 +67,42 @@ export class BillionScaleProgramInteractions {
       .instruction();
   }
 
-  // Get all billion-scale takeovers with proper type conversion
+  // Get all billion-scale takeovers with proper type conversion - FIXED
   async getAllBillionScaleTakeovers(): Promise<(BillionScaleTakeover & { publicKey: PublicKey })[]> {
     try {
-      const accounts = await this.program.account.takeover.all();
+      // Solution 1: Try different casing variations
+      let accounts: any[] = [];
+      
+      try {
+        // Try with capital T (as defined in IDL)
+        accounts = await (this.program.account as any).Takeover.all();
+      } catch (e1) {
+        try {
+          // Try with lowercase t
+          accounts = await (this.program.account as any).takeover.all();
+        } catch (e2) {
+          // Solution 2: Use getProgramAccounts for raw account fetching
+          console.log('Using raw account fetching method...');
+          const programAccounts = await this.connection.getProgramAccounts(
+            this.program.programId,
+            {
+              filters: [
+                {
+                  memcmp: {
+                    offset: 0,
+                    bytes: 'EqGcVYfLqW7D4sJKwfLB4w', // Takeover discriminator in base58
+                  },
+                },
+              ],
+            }
+          );
+
+          accounts = programAccounts.map(acc => ({
+            publicKey: acc.pubkey,
+            account: this.program.coder.accounts.decode('Takeover', acc.account.data),
+          }));
+        }
+      }
       
       return accounts.map(account => {
         // Properly convert raw account data to our interface
@@ -86,14 +118,83 @@ export class BillionScaleProgramInteractions {
     }
   }
 
-  // Get specific takeover with billion-scale data and proper typing
+  // Get specific takeover with billion-scale data and proper typing - FIXED
   async getBillionScaleTakeover(takeoverPubkey: PublicKey): Promise<BillionScaleTakeover | null> {
     try {
-      const account = await this.program.account.takeover.fetch(takeoverPubkey);
+      let account: any = null;
+      
+      try {
+        // Try with capital T (as defined in IDL)
+        account = await (this.program.account as any).Takeover.fetch(takeoverPubkey);
+      } catch (e1) {
+        try {
+          // Try with lowercase t
+          account = await (this.program.account as any).takeover.fetch(takeoverPubkey);
+        } catch (e2) {
+          // Solution 2: Use raw account fetching
+          console.log('Using raw account fetching for specific takeover...');
+          const accountInfo = await this.connection.getAccountInfo(takeoverPubkey);
+          if (!accountInfo) {
+            throw new Error('Account not found');
+          }
+          
+          account = this.program.coder.accounts.decode('Takeover', accountInfo.data);
+        }
+      }
+      
       // Cast to our interface with proper type conversion
       return account as unknown as BillionScaleTakeover;
     } catch (error) {
       console.error("Error fetching billion-scale takeover:", error);
+      return null;
+    }
+  }
+
+  // Alternative method using raw account fetching for better reliability
+  async getBillionScaleTakeoverRaw(takeoverPubkey: PublicKey): Promise<BillionScaleTakeover | null> {
+    try {
+      const accountInfo = await this.connection.getAccountInfo(takeoverPubkey);
+      
+      if (!accountInfo) {
+        return null;
+      }
+
+      // Decode the account data manually
+      const decodedAccount = this.program.coder.accounts.decode('Takeover', accountInfo.data);
+      
+      return decodedAccount as unknown as BillionScaleTakeover;
+    } catch (error) {
+      console.error("Error fetching takeover account:", error);
+      return null;
+    }
+  }
+
+  // Get contributor data - FIXED
+  async getContributor(takeoverPubkey: PublicKey, contributorPubkey: PublicKey): Promise<ContributorData | null> {
+    try {
+      const [contributorPDA] = await findContributorPDA(takeoverPubkey, contributorPubkey);
+      
+      let account: any = null;
+      
+      try {
+        // Try with proper casing
+        account = await (this.program.account as any).ContributorData.fetch(contributorPDA);
+      } catch (e1) {
+        try {
+          account = await (this.program.account as any).contributorData.fetch(contributorPDA);
+        } catch (e2) {
+          // Use raw fetching
+          const accountInfo = await this.connection.getAccountInfo(contributorPDA);
+          if (!accountInfo) {
+            return null;
+          }
+          account = this.program.coder.accounts.decode('ContributorData', accountInfo.data);
+        }
+      }
+      
+      return account as unknown as ContributorData;
+    } catch (error) {
+      console.error("Error fetching contributor data:", error);
       return null;
     }
   }

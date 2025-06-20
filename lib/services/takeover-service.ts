@@ -25,7 +25,6 @@ export interface CreateTakeoverData {
   v1_total_supply?: string | number | null;
   v2_total_supply?: string | number | null;
   reward_rate_bp?: number;
-  // UPDATED: Use token_amount_target instead of target_participation_bp
   token_amount_target?: string | number | null;
   calculated_min_amount?: string | number | null;
   max_safe_total_contribution?: string | number | null;
@@ -53,55 +52,57 @@ export interface UpdateTakeoverData {
   final_reward_rate?: number;
   jupiter_swap_completed?: boolean;
   lp_created?: boolean;
-  // UPDATED: Support token amount target updates
   token_amount_target?: string | number | null;
 }
 
 /**
- * Convert database bigint values to strings for JavaScript compatibility
+ * Utility function to prepare BigInt values from various input types
  */
-function convertBigIntFields(row: any): any {
-  return {
-    ...row,
-    // Convert bigint fields to strings
-    min_amount: row.min_amount?.toString() || '0',
-    start_time: row.start_time?.toString() || '0',
-    end_time: row.end_time?.toString() || '0',
-    total_contributed: row.total_contributed?.toString() || '0',
-    v1_total_supply: row.v1_total_supply?.toString(),
-    v2_total_supply: row.v2_total_supply?.toString(),
-    calculated_min_amount: row.calculated_min_amount?.toString(),
-    max_safe_total_contribution: row.max_safe_total_contribution?.toString(),
-    v1_market_price_lamports: row.v1_market_price_lamports?.toString(),
-    reward_pool_tokens: row.reward_pool_tokens?.toString(),
-    liquidity_pool_tokens: row.liquidity_pool_tokens?.toString(),
-    sol_for_liquidity: row.sol_for_liquidity?.toString(),
-    // UPDATED: Convert token amount target
-    token_amount_target: row.token_amount_target?.toString() || '0',
-    // Keep backwards compatibility - map token_amount_target to minAmount for UI
-    minAmount: row.token_amount_target?.toString() || row.calculated_min_amount?.toString() || row.min_amount?.toString() || '0',
-  };
-}
-
-/**
- * Convert input values to appropriate database types - FIXED type safety
- */
-function prepareBigIntValue(value: string | number | null | undefined): bigint | null {
-  if (value === undefined || value === null || value === '') {
-    return null;
-  }
+function prepareBigIntValue(value: string | number | bigint | null | undefined): bigint | null {
+  if (value === null || value === undefined || value === '') return null;
+  
   try {
-    return BigInt(value);
-  } catch {
+    if (typeof value === 'bigint') return value;
+    if (typeof value === 'number') return BigInt(Math.floor(value));
+    if (typeof value === 'string') {
+      const cleaned = value.replace(/[^\d]/g, '');
+      return cleaned ? BigInt(cleaned) : null;
+    }
+    return null;
+  } catch (error) {
+    console.warn('Failed to convert to BigInt:', value, error);
     return null;
   }
 }
 
 /**
- * Calculate token amount target from legacy target_participation_bp - FIXED type safety
+ * Convert database bigint fields to strings for safe JSON serialization
+ */
+function convertBigIntFields(takeover: any) {
+  const converted = { ...takeover };
+  
+  // Convert all bigint fields to strings
+  const bigintFields = [
+    'min_amount', 'start_time', 'end_time', 'total_contributed',
+    'v1_total_supply', 'v2_total_supply', 'reward_pool_tokens',
+    'liquidity_pool_tokens', 'calculated_min_amount',
+    'max_safe_total_contribution', 'v1_market_price_lamports', 'sol_for_liquidity'
+  ];
+  
+  bigintFields.forEach(field => {
+    if (converted[field] !== null && converted[field] !== undefined) {
+      converted[field] = converted[field].toString();
+    }
+  });
+  
+  return converted;
+}
+
+/**
+ * Calculate token amount target with proper type safety
  */
 function calculateTokenAmountTarget(
-  v1TotalSupply: string | number | null | undefined,
+  v1TotalSupply?: string | number | null | undefined,
   targetParticipationBp?: number,
   calculatedMinAmount?: string | number | null | undefined,
   minAmount?: string | number | null | undefined
@@ -145,102 +146,72 @@ export class TakeoverService {
           is_finalized, is_successful, has_v2_mint, v2_token_mint, v2_total_supply,
           custom_reward_rate, token_name, image_url, v1_total_supply,
           reward_pool_tokens, liquidity_pool_tokens, reward_rate_bp, 
+          target_participation_bp, participation_rate_bp,
           token_amount_target, calculated_min_amount, max_safe_total_contribution,
-          v1_market_price_lamports, sol_for_liquidity, jupiter_swap_completed,
-          lp_created, participation_rate_bp, final_safety_utilization,
-          final_reward_rate, created_at, updated_at
+          v1_market_price_lamports, sol_for_liquidity, signature,
+          jupiter_swap_completed, lp_created, final_safety_utilization, final_reward_rate,
+          created_at, updated_at
         FROM takeovers
+        WHERE 1=1
       `;
       
-      const conditions: string[] = [];
       const params: any[] = [];
-      
-      // Add address filter (exact match)
-      if (filters.address) {
-        conditions.push(`address = $${params.length + 1}`);
-        params.push(filters.address);
-        console.log('🔍 Adding address filter:', filters.address);
-      }
-      
-      // Add authority filter
+      let paramIndex = 1;
+
+      // Add filters
       if (filters.authority) {
-        conditions.push(`authority = $${params.length + 1}`);
+        query += ` AND authority = $${paramIndex}`;
         params.push(filters.authority);
-        console.log('🔍 Adding authority filter:', filters.authority);
+        paramIndex++;
       }
-      
-      // Add status filter
+
+      if (filters.address) {
+        query += ` AND address = $${paramIndex}`;
+        params.push(filters.address);
+        paramIndex++;
+      }
+
       if (filters.status) {
-        const now = Math.floor(Date.now() / 1000);
-        switch (filters.status.toLowerCase()) {
+        switch (filters.status) {
           case 'active':
-            conditions.push(`is_finalized = false AND end_time > $${params.length + 1}`);
-            params.push(now);
+            query += ` AND is_finalized = false`;
             break;
           case 'finalized':
-            conditions.push(`is_finalized = true`);
+            query += ` AND is_finalized = true`;
             break;
           case 'successful':
-            conditions.push(`is_finalized = true AND is_successful = true`);
+            query += ` AND is_finalized = true AND is_successful = true`;
             break;
           case 'failed':
-            conditions.push(`is_finalized = true AND is_successful = false`);
-            break;
-          case 'expired':
-            conditions.push(`is_finalized = false AND end_time <= $${params.length + 1}`);
-            params.push(now);
+            query += ` AND is_finalized = true AND is_successful = false`;
             break;
         }
-        console.log('🔍 Adding status filter:', filters.status);
       }
-      
-      // Add WHERE clause if we have conditions
-      if (conditions.length > 0) {
-        query += ` WHERE ${conditions.join(' AND ')}`;
-      }
-      
-      // Add ordering
+
+      // Add ordering and pagination
       query += ` ORDER BY created_at DESC`;
       
-      // Add pagination
       if (filters.limit) {
-        query += ` LIMIT $${params.length + 1}`;
+        query += ` LIMIT $${paramIndex}`;
         params.push(filters.limit);
+        paramIndex++;
       }
       
       if (filters.offset) {
-        query += ` OFFSET $${params.length + 1}`;
+        query += ` OFFSET $${paramIndex}`;
         params.push(filters.offset);
+        paramIndex++;
       }
 
       console.log('🔄 Executing getTakeovers query...');
-      console.log('Query:', query.replace(/\s+/g, ' ').trim());
-      console.log('Params:', params);
-
       const queryStart = Date.now();
       const result = await db.query(query, params);
       const queryEnd = Date.now();
-
-      console.log(`✅ Retrieved ${result.rows.length} takeovers in ${queryEnd - queryStart}ms`);
       
-      // Convert bigint values to strings and add legacy compatibility
-      return result.rows.map(row => {
-        const processed = convertBigIntFields(row);
-        
-        // UPDATED: Enhanced goal checking using token_amount_target
-        const totalContributed = BigInt(processed.total_contributed || '0');
-        const tokenTarget = BigInt(processed.token_amount_target || '0');
-        const calculatedMin = BigInt(processed.calculated_min_amount || '0');
-        
-        // Use token_amount_target as primary goal, fall back to calculated_min_amount
-        const goalAmount = tokenTarget > 0n ? tokenTarget : calculatedMin;
-        processed.isGoalMet = totalContributed >= goalAmount;
-        processed.progressPercent = goalAmount > 0n 
-          ? Math.min(100, Number(totalContributed * 100n / goalAmount))
-          : 0;
-        
-        return processed;
-      });
+      const takeovers = result.rows.map(convertBigIntFields);
+      console.log(`✅ Found ${takeovers.length} takeovers in ${queryEnd - queryStart}ms`);
+      
+      return takeovers;
       
     } catch (error: any) {
       console.error('💥 TakeoverService.getTakeovers failed:');
@@ -251,14 +222,10 @@ export class TakeoverService {
   }
 
   /**
-   * Get a single takeover by address
+   * Get a specific takeover by address with goal checking logic
    */
   static async getTakeoverByAddress(db: PoolClient, address: string) {
     console.log('🔍 TakeoverService.getTakeoverByAddress called for:', address);
-    
-    if (!address || typeof address !== 'string') {
-      throw new ApiError('Invalid address parameter', 'VALIDATION_ERROR');
-    }
     
     try {
       const query = `
@@ -268,21 +235,21 @@ export class TakeoverService {
           is_finalized, is_successful, has_v2_mint, v2_token_mint, v2_total_supply,
           custom_reward_rate, token_name, image_url, v1_total_supply,
           reward_pool_tokens, liquidity_pool_tokens, reward_rate_bp, 
+          target_participation_bp, participation_rate_bp,
           token_amount_target, calculated_min_amount, max_safe_total_contribution,
-          v1_market_price_lamports, sol_for_liquidity, jupiter_swap_completed,
-          lp_created, participation_rate_bp, final_safety_utilization,
-          final_reward_rate, created_at, updated_at
+          v1_market_price_lamports, sol_for_liquidity, signature,
+          jupiter_swap_completed, lp_created, final_safety_utilization, final_reward_rate,
+          created_at, updated_at
         FROM takeovers 
         WHERE address = $1
       `;
       
-      console.log('🔄 Executing getTakeoverByAddress query for:', address);
+      console.log('🔄 Executing getTakeoverByAddress query...');
       const queryStart = Date.now();
       const result = await db.query(query, [address]);
       const queryEnd = Date.now();
 
       if (result.rows.length === 0) {
-        console.error('❌ Takeover not found for address:', address);
         throw new NotFoundError(`Takeover not found with address: ${address}`);
       }
 
@@ -323,7 +290,7 @@ export class TakeoverService {
   }
 
   /**
-   * Create a new takeover with token amount target - FIXED type safety
+   * Create a new takeover with token amount target
    */
   static async createTakeover(db: PoolClient, data: CreateTakeoverData) {
     console.log('💾 TakeoverService.createTakeover called with data:', {
@@ -334,12 +301,12 @@ export class TakeoverService {
     });
     
     try {
-      // UPDATED: Calculate token amount target if not provided - FIXED type safety
+      // Calculate token amount target if not provided
       const tokenAmountTarget = data.token_amount_target !== undefined && data.token_amount_target !== null
         ? prepareBigIntValue(data.token_amount_target)
         : calculateTokenAmountTarget(
             data.v1_total_supply,
-            undefined, // No longer using target_participation_bp
+            undefined,
             data.calculated_min_amount,
             data.min_amount
           );
@@ -377,7 +344,7 @@ export class TakeoverService {
         data.v2_token_mint,
         prepareBigIntValue(data.v1_total_supply),
         data.reward_rate_bp,
-        tokenAmountTarget, // UPDATED: Use calculated token amount target
+        tokenAmountTarget,
         tokenAmountTarget, // Set calculated_min_amount to same value for consistency
         prepareBigIntValue(data.max_safe_total_contribution),
         prepareBigIntValue(data.v1_market_price_lamports),
@@ -411,7 +378,7 @@ export class TakeoverService {
   }
 
   /**
-   * Update an existing takeover - FIXED type safety
+   * Update an existing takeover
    */
   static async updateTakeover(db: PoolClient, address: string, data: UpdateTakeoverData) {
     console.log('🔄 TakeoverService.updateTakeover called for:', address);
@@ -423,7 +390,7 @@ export class TakeoverService {
       const params: any[] = [];
       let paramIndex = 1;
 
-      // Helper function to add update field - FIXED type safety
+      // Helper function to add update field
       const addField = (field: string, value: any, transformer?: (val: any) => any) => {
         if (value !== undefined) {
           updateFields.push(`${field} = $${paramIndex}`);
@@ -450,7 +417,6 @@ export class TakeoverService {
       addField('final_reward_rate', data.final_reward_rate);
       addField('jupiter_swap_completed', data.jupiter_swap_completed);
       addField('lp_created', data.lp_created);
-      // UPDATED: Support token amount target updates
       addField('token_amount_target', data.token_amount_target, prepareBigIntValue);
 
       if (updateFields.length === 0) {
@@ -510,6 +476,79 @@ export class TakeoverService {
       console.error('Error:', error.message);
       console.error('Stack:', error.stack);
       throw new ApiError(`Failed to update takeover: ${error.message}`, 'DATABASE_ERROR');
+    }
+  }
+
+  /**
+   * Finalize a takeover - NEW METHOD
+   */
+  static async finalizeTakeover(
+    db: PoolClient,
+    takeoverAddress: string,
+    authority: string,
+    isSuccessful: boolean,
+    transactionSignature: string
+  ) {
+    console.log('🏁 TakeoverService.finalizeTakeover called for:', {
+      takeoverAddress,
+      authority,
+      isSuccessful,
+      transactionSignature
+    });
+    
+    try {
+      // First, verify the takeover exists and belongs to the authority
+      const existingTakeover = await this.getTakeoverByAddress(db, takeoverAddress);
+      
+      if (existingTakeover.authority !== authority) {
+        throw new ApiError('Unauthorized: Only the takeover authority can finalize', 'UNAUTHORIZED', 403);
+      }
+      
+      if (existingTakeover.is_finalized) {
+        throw new ApiError('Takeover is already finalized', 'ALREADY_FINALIZED', 400);
+      }
+      
+      // Update the takeover as finalized
+      const updateData: UpdateTakeoverData = {
+        is_finalized: true,
+        is_successful: isSuccessful,
+        // Store transaction signature in the existing signature field
+        // Note: This overwrites any previous signature, but that's acceptable for finalization
+      };
+      
+      // If successful, ensure we have a v2 token mint
+      if (isSuccessful) {
+        updateData.has_v2_mint = true;
+        // v2_token_mint should be set from the transaction or provided separately
+      }
+      
+      const finalizedTakeover = await this.updateTakeover(db, takeoverAddress, updateData);
+      
+      // Also update the signature field separately to store the finalization transaction
+      await db.query(
+        'UPDATE takeovers SET signature = $1 WHERE address = $2',
+        [transactionSignature, takeoverAddress]
+      );
+      
+      console.log('✅ Takeover finalized successfully:', {
+        id: finalizedTakeover.id,
+        address: finalizedTakeover.address,
+        isSuccessful: finalizedTakeover.is_successful,
+        transactionSignature: transactionSignature
+      });
+      
+      return finalizedTakeover;
+      
+    } catch (error: any) {
+      console.error('💥 TakeoverService.finalizeTakeover failed:');
+      console.error('Error:', error.message);
+      console.error('Stack:', error.stack);
+      
+      if (error instanceof ApiError || error instanceof NotFoundError) {
+        throw error;
+      }
+      
+      throw new ApiError(`Failed to finalize takeover: ${error.message}`, 'DATABASE_ERROR');
     }
   }
 
