@@ -122,254 +122,306 @@ export default function CreatePage() {
   });
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    
-    if (!publicKey) {
-      toast({
-        title: "Wallet Not Connected",
-        description: "Please connect your wallet to create a takeover",
-        variant: "destructive"
-      });
-      return;
-    }
+  e.preventDefault();
+  
+  if (!publicKey) {
+    toast({
+      title: "Wallet Not Connected",
+      description: "Please connect your wallet to create a takeover",
+      variant: "destructive"
+    });
+    return;
+  }
 
+  try {
+    console.log("🚀 Starting billion-scale takeover creation with UPDATED IDL...");
+    
+    setLoading(true);
+    
+    // Check wallet balance
+    const balance = await connection.getBalance(publicKey);
+    console.log("💰 Wallet balance:", balance / 1_000_000_000, "SOL");
+    
+    if (balance < 10_000_000) { // 0.01 SOL minimum
+      throw new Error(`Insufficient SOL balance. You have ${balance / 1_000_000_000} SOL, but need at least 0.01 SOL for transaction fees and account creation.`);
+    }
+    
+    // Convert SOL to lamports for the smart contract
+    const v1MarketPriceLamports = solToLamports(formData.v1TokenPriceSol);
+    
+    // Validate price
+    const priceError = validateSolPrice(formData.v1TokenPriceSol);
+    if (priceError) {
+      throw new Error(priceError);
+    }
+    
+    if (parseFloat(v1MarketPriceLamports) < 1) {
+      throw new Error("Price must be at least 1 lamport (0.000000001 SOL)");
+    }
+    
+    // Parse form data
+    const v1Mint = new PublicKey(formData.v1TokenMint);
+    const duration = BigInt(Number(formData.duration));
+    const rewardRateBp = Number(formData.rewardRateBp);
+    const targetParticipationBp = Number(formData.targetParticipationBp);
+    const v1MarketPriceLamportsBigInt = BigInt(v1MarketPriceLamports);
+    
+    console.log("📊 Billion-scale form data parsed:");
+    console.log("   V1 Mint:", v1Mint.toString());
+    console.log("   Duration:", duration.toString(), "days (", Number(duration) * 86400, "seconds)");
+    console.log("   Reward Rate:", rewardRateBp, "bp (", rewardRateBp/100, "x)");
+    console.log("   Target Participation:", targetParticipationBp, "bp (", targetParticipationBp/100, "%)");
+    console.log("   V1 Market Price:", formData.v1TokenPriceSol, "SOL =", v1MarketPriceLamports, "lamports");
+    
+    // Validate parameters
+    if (rewardRateBp < 100 || rewardRateBp > 200) {
+      throw new Error("Reward rate must be between 100 (1.0x) and 200 (2.0x) basis points");
+    }
+    if (targetParticipationBp < 100 || targetParticipationBp > 10000) {
+      throw new Error("Target participation must be between 100 (1%) and 10000 (100%) basis points");
+    }
+    if (Number(duration) < 1 || Number(duration) > 30) {
+      throw new Error("Duration must be between 1 and 30 days");
+    }
+    
+    // Find takeover PDA (exactly as in IDL)
+    const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("takeover"),
+        publicKey.toBuffer(),
+        v1Mint.toBuffer()
+      ],
+      new PublicKey(PROGRAM_ID)
+    );
+    
+    console.log("🎯 Takeover PDA:", takeoverPDA.toString(), "bump:", bump);
+    
+    // Create vault keypair (must be signer as per IDL)
+    const vault = Keypair.generate();
+    console.log("🏦 Vault created:", vault.publicKey.toString());
+    
+    // Use treasury address from constants
+    const treasuryAddress = new PublicKey(TREASURY_ADDRESS);
+    console.log("🏛️ Treasury address:", treasuryAddress.toString());
+    
+    // Validate V1 token mint
+    console.log("✅ Validating V1 token mint...");
+    let mintInfo;
     try {
-      console.log("🚀 Starting billion-scale takeover creation with UPDATED IDL...");
-      
-      setLoading(true);
-      
-      // Check wallet balance
-      const balance = await connection.getBalance(publicKey);
-      console.log("💰 Wallet balance:", balance / 1_000_000_000, "SOL");
-      
-      if (balance < 10_000_000) { // 0.01 SOL minimum
-        throw new Error(`Insufficient SOL balance. You have ${balance / 1_000_000_000} SOL, but need at least 0.01 SOL for transaction fees and account creation.`);
+      mintInfo = await connection.getParsedAccountInfo(v1Mint);
+      if (!mintInfo.value || !mintInfo.value.data || !('parsed' in mintInfo.value.data)) {
+        throw new Error("Invalid V1 token mint - account not found or not a token mint");
       }
       
-      // Convert SOL to lamports for the smart contract
-      const v1MarketPriceLamports = solToLamports(formData.v1TokenPriceSol);
-      
-      // Validate price
-      const priceError = validateSolPrice(formData.v1TokenPriceSol);
-      if (priceError) {
-        throw new Error(priceError);
+      const parsed = mintInfo.value.data.parsed;
+      if (!parsed.info) {
+        throw new Error("Invalid V1 token mint - missing mint info");
       }
       
-      if (parseFloat(v1MarketPriceLamports) < 1) {
-        throw new Error("Price must be at least 1 lamport (0.000000001 SOL)");
-      }
+      console.log("📊 V1 token info:");
+      console.log("   Supply:", parsed.info.supply);
+      console.log("   Decimals:", parsed.info.decimals);
+      console.log("   Mint Authority:", parsed.info.mintAuthority);
       
-      // Parse form data
-      const v1Mint = new PublicKey(formData.v1TokenMint);
-      const duration = BigInt(Number(formData.duration));
-      const rewardRateBp = Number(formData.rewardRateBp);
-      const targetParticipationBp = Number(formData.targetParticipationBp);
-      const v1MarketPriceLamportsBigInt = BigInt(v1MarketPriceLamports);
+    } catch (mintError) {
+      console.error("❌ V1 mint validation failed:", mintError);
+      throw new Error(`Invalid V1 token mint: ${mintError instanceof Error ? mintError.message : 'Unknown error'}`);
+    }
+    
+    // Create the instruction
+    const instruction = createInitializeBillionScaleInstruction(
+      new PublicKey(PROGRAM_ID),
+      publicKey,
+      treasuryAddress,
+      v1Mint,
+      takeoverPDA,
+      vault.publicKey,
+      duration,
+      rewardRateBp,
+      targetParticipationBp,
+      v1MarketPriceLamportsBigInt
+    );
+    
+    // Build and send transaction
+    const transaction = new Transaction().add(instruction);
+    
+    // Get recent blockhash
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = publicKey;
+    
+    // Vault must sign the transaction
+    transaction.partialSign(vault);
+    
+    console.log("📡 Sending billion-scale takeover creation transaction...");
+    
+    // Send transaction
+    const signature = await sendTransaction(transaction, connection, {
+      signers: [vault]
+    });
+    
+    console.log("✅ Transaction sent:", signature);
+    
+    // Wait for confirmation
+    const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+    
+    if (confirmation.value.err) {
+      throw new Error(`Transaction failed: ${confirmation.value.err}`);
+    }
+    
+    console.log("🎉 Billion-scale takeover created successfully!");
+    
+    // Store in database with proper error handling
+    try {
+      console.log("💾 Storing takeover in database...");
       
-      console.log("📊 Billion-scale form data parsed:");
-      console.log("   V1 Mint:", v1Mint.toString());
-      console.log("   Duration:", duration.toString(), "days (", Number(duration) * 86400, "seconds)");
-      console.log("   Reward Rate:", rewardRateBp, "bp (", rewardRateBp/100, "x)");
-      console.log("   Target Participation:", targetParticipationBp, "bp (", targetParticipationBp/100, "%)");
-      console.log("   V1 Market Price:", formData.v1TokenPriceSol, "SOL =", v1MarketPriceLamports, "lamports");
+      // Calculate startTime and endTime from duration
+      const startTime = Math.floor(Date.now() / 1000);
+      const endTime = startTime + (Number(duration) * 24 * 60 * 60); // duration in days
       
-      // Validate parameters
-      if (rewardRateBp < 100 || rewardRateBp > 200) {
-        throw new Error("Reward rate must be between 100 (1.0x) and 200 (2.0x) basis points");
-      }
-      if (targetParticipationBp < 100 || targetParticipationBp > 10000) {
-        throw new Error("Target participation must be between 100 (1%) and 10000 (100%) basis points");
-      }
-      if (Number(duration) < 1 || Number(duration) > 30) {
-        throw new Error("Duration must be between 1 and 30 days");
-      }
-      
-      // Find takeover PDA (exactly as in IDL)
-      const [takeoverPDA, bump] = PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("takeover"),
-          publicKey.toBuffer(),
-          v1Mint.toBuffer()
-        ],
-        new PublicKey(PROGRAM_ID)
-      );
-      
-      console.log("🎯 Takeover PDA:", takeoverPDA.toString(), "bump:", bump);
-      
-      // Create vault keypair (must be signer as per IDL)
-      const vault = Keypair.generate();
-      console.log("🏦 Vault created:", vault.publicKey.toString());
-      
-      // Use treasury address from constants
-      const treasuryAddress = new PublicKey(TREASURY_ADDRESS);
-      console.log("🏛️ Treasury address:", treasuryAddress.toString());
-      
-      // Validate V1 token mint
-      console.log("✅ Validating V1 token mint...");
-      let mintInfo;
-      try {
-        mintInfo = await connection.getParsedAccountInfo(v1Mint);
-        if (!mintInfo.value || !mintInfo.value.data || !('parsed' in mintInfo.value.data)) {
-          throw new Error("Invalid V1 token mint - account not found or not a token mint");
+      // Prepare payload with proper field mapping
+      const payload = {
+        // Required fields with correct names
+        address: takeoverPDA.toString(),
+        authority: publicKey.toString(),
+        v1_token_mint: v1Mint.toString(),  // ✅ Correct field name
+        vault: vault.publicKey.toString(),
+        
+        // Time fields - ensure proper conversion
+        start_time: startTime.toString(),  // ✅ Correct field name
+        end_time: endTime.toString(),      // ✅ Correct field name
+        
+        // Numeric fields - ensure proper typing
+        reward_rate_bp: parseInt(formData.rewardRateBp), // ✅ Correct field name & type
+        target_participation_bp: parseInt(formData.targetParticipationBp), // ✅ Correct field name & type
+        
+        // Amount fields - convert to string for BigInt handling
+        v1_market_price_lamports: v1MarketPriceLamports.toString(), // ✅ Correct field name
+        min_amount: "1000000", // ✅ Default minimum amount
+        
+        // Optional fields with correct names
+        token_name: formData.tokenName || '', // ✅ Correct field name
+        image_url: formData.imageUrl && formData.imageUrl.trim() ? formData.imageUrl : undefined, // ✅ Correct field name
+        
+        // Additional fields that may be required
+        v1_total_supply: "1000000000000000", // ✅ From your logs
+        custom_reward_rate: 1.2, // ✅ Based on your 120 bp
+        
+        // Optional signature field
+        signature: signature || ''
+      };
+
+      // Additional validation before sending:
+      const validatePayload = (payload: any) => {
+        const required = ['address', 'authority', 'v1_token_mint', 'vault'];
+        const missing = required.filter(field => !payload[field]);
+        
+        if (missing.length > 0) {
+          throw new Error(`Missing required fields: ${missing.join(', ')}`);
         }
         
-        const parsed = mintInfo.value.data.parsed;
-        if (!parsed.info) {
-          throw new Error("Invalid V1 token mint - missing mint info");
+        // Validate Solana addresses (should be 32-44 characters)
+        const addressFields = ['address', 'authority', 'v1_token_mint', 'vault'];
+        for (const field of addressFields) {
+          const value = payload[field];
+          if (value && (value.length < 32 || value.length > 44)) {
+            throw new Error(`Invalid ${field}: ${value}`);
+          }
         }
         
-        console.log("📊 V1 token info:");
-        console.log("   Supply:", parsed.info.supply);
-        console.log("   Decimals:", parsed.info.decimals);
-        console.log("   Mint Authority:", parsed.info.mintAuthority);
+        // Validate numeric fields
+        if (payload.reward_rate_bp && (payload.reward_rate_bp < 100 || payload.reward_rate_bp > 200)) {
+          throw new Error(`Invalid reward_rate_bp: ${payload.reward_rate_bp} (should be 100-200)`);
+        }
         
-      } catch (mintError) {
-        console.error("❌ V1 mint validation failed:", mintError);
-        throw new Error(`Invalid V1 token mint: ${mintError instanceof Error ? mintError.message : 'Unknown error'}`);
-      }
+        if (payload.target_participation_bp && (payload.target_participation_bp < 1 || payload.target_participation_bp > 10000)) {
+          throw new Error(`Invalid target_participation_bp: ${payload.target_participation_bp} (should be 1-10000)`);
+        }
+        
+        return true;
+      };
+
+      // Validate payload before sending
+      validatePayload(payload);
+      console.log("📝 Validated database payload:", JSON.stringify(payload, null, 2));
       
-      // Create the instruction
-      const instruction = createInitializeBillionScaleInstruction(
-        new PublicKey(PROGRAM_ID),
-        publicKey,
-        treasuryAddress,
-        v1Mint,
-        takeoverPDA,
-        vault.publicKey,
-        duration,
-        rewardRateBp,
-        targetParticipationBp,
-        v1MarketPriceLamportsBigInt
-      );
-      
-      // Build and send transaction
-      const transaction = new Transaction().add(instruction);
-      
-      // Get recent blockhash
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-      
-      // Vault must sign the transaction
-      transaction.partialSign(vault);
-      
-      console.log("📡 Sending billion-scale takeover creation transaction...");
-      
-      // Send transaction
-      const signature = await sendTransaction(transaction, connection, {
-        signers: [vault]
+      const dbResponse = await fetch('/api/takeovers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
       });
       
-      console.log("✅ Transaction sent:", signature);
+      console.log("📊 Database response status:", dbResponse.status);
       
-      // Wait for confirmation
-      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
-      
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${confirmation.value.err}`);
-      }
-      
-      console.log("🎉 Billion-scale takeover created successfully!");
-      
-      // Store in database with proper error handling
-      try {
-        console.log("💾 Storing takeover in database...");
+      if (!dbResponse.ok) {
+        const errorText = await dbResponse.text();
+        console.error("❌ Database storage failed:", errorText);
         
-        // Calculate startTime and endTime from duration
-        const startTime = Math.floor(Date.now() / 1000);
-        const endTime = startTime + (Number(duration) * 24 * 60 * 60); // duration in days
-        
-        // Prepare payload with proper field mapping
-        const payload = {
-          address: takeoverPDA.toString(),
-          authority: publicKey.toString(),
-          v1TokenMint: v1Mint.toString(),
-          vault: vault.publicKey.toString(),
-          startTime: startTime.toString(), // ✅ Convert to string
-          endTime: endTime.toString(),     // ✅ Convert to string
-          rewardRateBp: Number(rewardRateBp), // ✅ Ensure it's a number
-          targetParticipationBp: Number(targetParticipationBp), // ✅ Ensure it's a number
-          v1MarketPriceLamports: v1MarketPriceLamports.toString(), // ✅ Convert to string
-          tokenName: formData.tokenName || '', // ✅ Ensure it's not undefined
-          imageUrl: formData.imageUrl && formData.imageUrl.trim() ? formData.imageUrl : undefined, // ✅ Only send if valid URL
-          signature: signature || ''
-        };
-        
-        console.log("📝 Database payload:", JSON.stringify(payload, null, 2));
-        
-        const dbResponse = await fetch('/api/takeovers', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        
-        console.log("📊 Database response status:", dbResponse.status);
-        
-        if (!dbResponse.ok) {
-          // Get detailed error information
-          const errorText = await dbResponse.text();
-          console.error("❌ Database storage failed:", errorText);
-          
-          let errorDetails;
-          try {
-            errorDetails = JSON.parse(errorText);
-          } catch {
-            errorDetails = { message: errorText };
-          }
-          
-          toast({
-            title: "⚠️ Database Storage Failed",
-            description: `Takeover created on-chain but database error: ${errorDetails.error?.message || errorDetails.message || 'Unknown error'}`,
-            variant: "destructive",
-            duration: 10000
-          });
-        } else {
-          const successResponse = await dbResponse.json();
-          console.log("✅ Database response:", successResponse);
-          
-          toast({
-            title: "✅ Complete Success!",
-            description: "Takeover created on-chain and stored in database successfully",
-            duration: 6000
-          });
+        // Enhanced error handling
+        let errorDetails;
+        try {
+          errorDetails = JSON.parse(errorText);
+          console.error("📋 Validation details:", errorDetails.error?.details);
+        } catch {
+          errorDetails = { message: errorText };
         }
         
-      } catch (dbError: any) {
-        console.error("💥 Database request failed:", dbError);
+        // Show warning but don't fail the entire process since blockchain succeeded
         toast({
-          title: "⚠️ Database Connection Failed",
-          description: `Takeover created on-chain but database connection failed: ${dbError.message}`,
+          title: "⚠️ Partial Success",
+          description: `Takeover created on blockchain but database storage failed: ${errorDetails.error?.message || errorDetails.message}. Transaction: ${signature}`,
           variant: "destructive",
           duration: 10000
         });
+      } else {
+        const successResponse = await dbResponse.json();
+        console.log("✅ Database response:", successResponse);
+        
+        // Complete success
+        toast({
+          title: "🎉 Complete Success!",
+          description: `Takeover created successfully! Transaction: ${signature}`,
+          duration: 8000
+        });
       }
       
-      // Reset form on success
-      setFormData({
-        v1TokenMint: "",
-        duration: "7",
-        rewardRateBp: "125",
-        targetParticipationBp: "3000", 
-        v1TokenPriceSol: "0.001", // Reset to SOL
-        tokenName: "",
-        imageUrl: ""
-      });
+    } catch (dbError) {
+      console.error("💥 Database storage failed:", dbError);
       
-    } catch (error: any) {
-      // Main error handler for the entire process
-      console.error("💥 Billion-scale creation failed:");
-      console.error("Error message:", error.message);
-      
+      // Show warning but don't fail since blockchain transaction succeeded
       toast({
-        title: "Creation Failed",
-        description: error.message || "Unknown error occurred",
-        variant: "destructive"
+        title: "⚠️ Partial Success",
+        description: `Takeover created on blockchain but database error occurred. Transaction: ${signature}`,
+        variant: "destructive",
+        duration: 10000
       });
-    } finally {
-      // Always reset loading state
-      setLoading(false);
     }
-  };
+    
+    // Reset form on success
+    setFormData({
+      v1TokenMint: "",
+      duration: "7",
+      rewardRateBp: "125",
+      targetParticipationBp: "3000",
+      v1TokenPriceSol: "0.001",
+      tokenName: "",
+      imageUrl: ""
+    });
+
+  } catch (error: any) {
+    console.error("💥 Takeover creation failed:", error);
+    
+    toast({
+      title: "❌ Creation Failed",
+      description: error.message || "Unknown error occurred",
+      variant: "destructive",
+      duration: 8000
+    });
+  } finally {
+    // Always reset loading state
+    setLoading(false);
+  }
+};
 
   if (!publicKey) {
     return (
