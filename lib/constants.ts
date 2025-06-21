@@ -1,10 +1,14 @@
 export const PROGRAM_ID = "CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ"
 export const TREASURY_ADDRESS = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "JhSgWvuJ2tKZPkXSoseFAUEsxav356Tr5pS2oWXV4BT";
 export const RPC_ENDPOINT = process.env.NEXT_PUBLIC_RPC_URL || process.env.NEXT_PUBLIC_SOLANA_RPC_URL;
-export const SECONDS_PER_DAY = 86400
-export const MAX_DURATION_DAYS = 30
-export const V2_TOTAL_SUPPLY = 10000000
+
+// Time Constants
+export const SECONDS_PER_DAY = 86400;
+export const MAX_DURATION_DAYS = 30;
 export const TOKEN_DECIMALS = 6;
+
+// Legacy Constants (for backward compatibility)
+export const V2_TOTAL_SUPPLY = 10000000;
 
 // Enhanced constants for billion-scale operations
 export const BILLION = 1_000_000_000_000_000; // 1B with 6 decimals
@@ -18,6 +22,66 @@ export const OVERFLOW_CUSHION_BP = 200; // 2% safety cushion
 export const DEFAULT_REWARD_RATE_BP = 150; // 1.5x default
 export const DEFAULT_TARGET_PARTICIPATION_BP = 500; // 5% default
 export const DEFAULT_DURATION_DAYS = 7; // 7 days default
+
+// Error messages for consistent error handling
+export const ERROR_MESSAGES = {
+  WALLET_NOT_CONNECTED: "Please connect your wallet",
+  INSUFFICIENT_BALANCE: "Insufficient SOL balance for transaction",
+  INVALID_TOKEN_MINT: "Invalid token mint address",
+  INVALID_AMOUNT: "Invalid amount specified",
+  TRANSACTION_FAILED: "Transaction failed to execute",
+  NETWORK_ERROR: "Network error occurred",
+  VALIDATION_FAILED: "Validation failed",
+  UNAUTHORIZED: "Unauthorized access",
+  NOT_FOUND: "Resource not found",
+  RATE_LIMITED: "Rate limit exceeded",
+  SUPPLY_TOO_SMALL: "Token supply must be at least 1M tokens",
+  SUPPLY_TOO_LARGE: "Token supply exceeds maximum allowed",
+  REWARD_RATE_INVALID: "Reward rate must be between 1.0x and 2.0x",
+  PARTICIPATION_RATE_INVALID: "Participation rate must be between 0.01% and 100%",
+  DURATION_INVALID: "Duration must be between 1 and 30 days",
+  PRICE_TOO_LOW: "Price must be at least 0.000000001 SOL",
+  PRICE_TOO_HIGH: "Price cannot exceed 1000 SOL",
+} as const;
+
+// Status constants
+export const STATUS = {
+  ACTIVE: 'active',
+  PENDING: 'pending',
+  COMPLETED: 'completed',
+  FAILED: 'failed',
+  EXPIRED: 'expired',
+  FINALIZED: 'finalized',
+  SUCCESSFUL: 'successful',
+} as const;
+
+// Transaction types
+export const TRANSACTION_TYPES = {
+  CREATE_TAKEOVER: 'create_takeover',
+  CONTRIBUTE: 'contribute',
+  FINALIZE: 'finalize',
+  CLAIM: 'claim',
+  REFUND: 'refund',
+} as const;
+
+// API Routes
+export const API_ROUTES = {
+  TAKEOVERS: '/api/takeovers',
+  CONTRIBUTIONS: '/api/contributions',
+  CLAIMS: '/api/claims',
+  SYNC: '/api/sync',
+  DEBUG: '/api/debug',
+} as const;
+
+// App Routes  
+export const APP_ROUTES = {
+  HOME: '/',
+  CREATE: '/create',
+  TAKEOVERS: '/takeovers',
+  CLAIMS: '/claims',
+  INITIALIZE: '/initialize',
+  MINT: '/mint',
+} as const;
 
 // Enhanced validation result interface
 export interface ValidationResult {
@@ -138,6 +202,46 @@ export function validateSolPrice(priceStr: string): ValidationResult {
   return { valid: true };
 }
 
+// Additional utility functions for billion-scale operations
+export function formatLargeNumber(num: number | string): string {
+  const numValue = typeof num === 'string' ? parseFloat(num) : num;
+  if (isNaN(numValue)) return "0";
+  
+  if (numValue >= 1_000_000_000) {
+    return `${(numValue / 1_000_000_000).toFixed(1)}B`;
+  } else if (numValue >= 1_000_000) {
+    return `${(numValue / 1_000_000).toFixed(1)}M`;
+  } else if (numValue >= 1_000) {
+    return `${(numValue / 1_000).toFixed(1)}K`;
+  }
+  return numValue.toLocaleString();
+}
+
+export function getSafetyLevel(utilization: number): 'safe' | 'warning' | 'danger' {
+  if (utilization < 0.8) return 'safe';
+  if (utilization < 0.95) return 'warning';
+  return 'danger';
+}
+
+// Additional safety utility functions for components
+export function getUtilizationColor(level: 'safe' | 'warning' | 'danger'): string {
+  switch (level) {
+    case 'safe': return 'text-green-600 dark:text-green-400';
+    case 'warning': return 'text-yellow-600 dark:text-yellow-400';
+    case 'danger': return 'text-red-600 dark:text-red-400';
+    default: return 'text-gray-600 dark:text-gray-400';
+  }
+}
+
+export function getUtilizationBgColor(level: 'safe' | 'warning' | 'danger'): string {
+  switch (level) {
+    case 'safe': return 'bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-700';
+    case 'warning': return 'bg-yellow-50 dark:bg-yellow-900 border-yellow-200 dark:border-yellow-700';
+    case 'danger': return 'bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-700';
+    default: return 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700';
+  }
+}
+
 // Enhanced token supply formatting
 export function formatTokenSupply(supply: number | string): string {
   const num = typeof supply === 'string' ? parseFloat(supply) : supply;
@@ -239,46 +343,6 @@ export function calculateMaxSafeContribution(
   const rewardRate = rewardRateBp / 10000;
   const safetyMultiplier = (10000 - OVERFLOW_CUSHION_BP) / 10000; // 98% safety
   return Math.floor((rewardPoolTokens * safetyMultiplier) / rewardRate);
-}
-
-// Additional utility functions for billion-scale operations
-export function formatLargeNumber(num: number | string): string {
-  const numValue = typeof num === 'string' ? parseFloat(num) : num;
-  if (isNaN(numValue)) return "0";
-  
-  if (numValue >= 1_000_000_000) {
-    return `${(numValue / 1_000_000_000).toFixed(1)}B`;
-  } else if (numValue >= 1_000_000) {
-    return `${(numValue / 1_000_000).toFixed(1)}M`;
-  } else if (numValue >= 1_000) {
-    return `${(numValue / 1_000).toFixed(1)}K`;
-  }
-  return numValue.toLocaleString();
-}
-
-export function getSafetyLevel(utilization: number): 'safe' | 'warning' | 'danger' {
-  if (utilization < 0.8) return 'safe';
-  if (utilization < 0.95) return 'warning';
-  return 'danger';
-}
-
-// Additional safety utility functions for components
-export function getUtilizationColor(level: 'safe' | 'warning' | 'danger'): string {
-  switch (level) {
-    case 'safe': return 'text-green-600 dark:text-green-400';
-    case 'warning': return 'text-yellow-600 dark:text-yellow-400';
-    case 'danger': return 'text-red-600 dark:text-red-400';
-    default: return 'text-gray-600 dark:text-gray-400';
-  }
-}
-
-export function getUtilizationBgColor(level: 'safe' | 'warning' | 'danger'): string {
-  switch (level) {
-    case 'safe': return 'bg-green-50 dark:bg-green-900 border-green-200 dark:border-green-700';
-    case 'warning': return 'bg-yellow-50 dark:bg-yellow-900 border-yellow-200 dark:border-yellow-700';
-    case 'danger': return 'bg-red-50 dark:bg-red-900 border-red-200 dark:border-red-700';
-    default: return 'bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-700';
-  }
 }
 
 // Export default enhanced configuration
