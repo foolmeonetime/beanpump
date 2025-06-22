@@ -305,6 +305,25 @@ export function WorkingContributionForm({
       return;
     }
 
+    // FIXED: Add takeover state validation matching program constraints
+    if (isFinalized) {
+      toast({
+        title: "Takeover Finalized",
+        description: "This takeover has already been finalized and no longer accepts contributions",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    if (!isActive || timeLeft <= 0) {
+      toast({
+        title: "Takeover Expired",
+        description: "This takeover has expired and no longer accepts contributions",
+        variant: "destructive"
+      });
+      return;
+    }
+
     const contributionAmount = parseFloat(amount);
     if (contributionAmount <= 0) {
       toast({
@@ -324,11 +343,24 @@ export function WorkingContributionForm({
       return;
     }
 
-    // Check if contribution would exceed safe limits
-    if (contributionAmount > remainingSafeSpace / 1_000_000) {
+    // FIXED: Add billion-scale validation matching program logic
+    const contributionLamports = Math.floor(contributionAmount * 1_000_000); // Convert to lamports (6 decimals)
+    
+    // Program constraint: amount <= 100M per contribution 
+    if (contributionLamports > 100_000_000 * 1_000_000) {
       toast({
         title: "Amount Too Large",
-        description: `Maximum safe contribution is ${(remainingSafeSpace / 1_000_000).toLocaleString()} tokens`,
+        description: "Maximum contribution is 100M tokens per transaction for billion-scale safety",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    // Check remaining safe space (matching program overflow protection)
+    if (contributionAmount > remainingSafeSpace / 1_000_000) {
+      toast({
+        title: "Amount Exceeds Safe Limit",
+        description: `Maximum safe contribution is ${(remainingSafeSpace / 1_000_000).toLocaleString()} tokens to prevent overflow`,
         variant: "destructive"
       });
       return;
@@ -339,10 +371,16 @@ export function WorkingContributionForm({
     try {
       setContributing(true);
       
-      console.log('🔧 Building contribution transaction...');
+      console.log('🔧 Building billion-scale contribution transaction...');
+      console.log('💰 Contribution details:');
+      console.log('  Amount (tokens):', contributionAmount);
+      console.log('  Amount (lamports):', contributionLamports);
+      console.log('  Takeover:', takeoverAddress);
+      console.log('  Vault:', vault);
+      console.log('  Token Mint:', v1TokenMint);
       
-      // Convert to program units (assuming 6 decimals)
-      const contributionLamports = BigInt(Math.floor(contributionAmount * 1_000_000));
+      // Convert to program units (6 decimals) - FIXED: Use contributionLamports from validation
+      const contributionLamportsBigInt = BigInt(contributionLamports);
       
       // Create the contribution instruction
       const takeoverPubkey = new PublicKey(takeoverAddress);
@@ -362,6 +400,14 @@ export function WorkingContributionForm({
         PROGRAM_ID
       );
 
+      console.log('🔑 Account addresses:');
+      console.log('  Contributor:', publicKey.toString());
+      console.log('  Takeover PDA:', takeoverPubkey.toString());
+      console.log('  User Token Account:', userTokenAccount.toString());
+      console.log('  Vault:', vaultPubkey.toString());
+      console.log('  Contributor PDA:', contributorPDA.toString());
+      console.log('  Program ID:', PROGRAM_ID.toString());
+
       // Create the transaction
       const transaction = new Transaction();
       
@@ -380,24 +426,28 @@ export function WorkingContributionForm({
         transaction.add(createATAInstruction);
       }
 
-      // Create contribute instruction data
+      // Create contribute instruction data - FIXED: Use actual IDL discriminator
       const instructionData = Buffer.alloc(9);
-      instructionData.writeUInt8(1, 0); // contribute instruction discriminator
-      instructionData.writeBigUInt64LE(contributionLamports, 1);
+      // From IDL: contribute_billion_scale discriminator is [18, 95, 63, 130, 189, 108, 16, 151]
+      const discriminator = Buffer.from([18, 95, 63, 130, 189, 108, 16, 151]);
+      const amountBuffer = Buffer.alloc(8);
+      amountBuffer.writeBigUInt64LE(contributionLamportsBigInt, 0);
+      
+      const instructionDataFull = Buffer.concat([discriminator, amountBuffer]);
 
-      // Create the contribute instruction
+      // Create the contribute instruction - FIXED: Use exact program account structure
       const contributeInstruction = new TransactionInstruction({
         keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },        // contributor
-          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },  // takeover
-          { pubkey: userTokenAccount, isSigner: false, isWritable: true }, // contributor_ata
-          { pubkey: vaultPubkey, isSigner: false, isWritable: true },     // vault
-          { pubkey: contributorPDA, isSigner: false, isWritable: true },  // contributor_account
+          { pubkey: publicKey, isSigner: true, isWritable: true },          // contributor (Signer)
+          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },    // takeover (Account<Takeover>)
+          { pubkey: userTokenAccount, isSigner: false, isWritable: true },  // contributor_ata (TokenAccount)
+          { pubkey: vaultPubkey, isSigner: false, isWritable: true },       // vault (TokenAccount)
+          { pubkey: contributorPDA, isSigner: false, isWritable: true },    // contributor_account (PDA, init)
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
         ],
         programId: PROGRAM_ID,
-        data: instructionData
+        data: instructionDataFull // Use the fixed instruction data
       });
 
       transaction.add(contributeInstruction);
@@ -484,7 +534,7 @@ export function WorkingContributionForm({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             takeoverId: parseInt(takeoverAddress.slice(0, 8), 16), // Generate a numeric ID from address
-            amount: contributionLamports.toString(),
+            amount: contributionLamports.toString(), // Use the lamports value (not BigInt)
             contributor: publicKey.toString(),
             transactionSignature: signature
           })
