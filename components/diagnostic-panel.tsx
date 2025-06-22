@@ -437,8 +437,8 @@ export function DiagnosticPanel({
             {!compact && (
               <div className="text-xs text-gray-500 p-2 bg-gray-50 rounded">
                 <div className="font-medium mb-1">Usage:</div>
-                <div>• Click "Test" to run diagnostics</div>
-                <div>• Click "TX Test" to test wallet transactions</div>
+                <div>• Click &quot;Test&quot; to run diagnostics</div>
+                <div>• Click &quot;TX Test&quot; to test wallet transactions</div>
                 <div>• Red indicators show issues to investigate</div>
                 <div>• Check browser console for detailed logs</div>
               </div>
