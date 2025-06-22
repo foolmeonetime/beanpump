@@ -80,6 +80,12 @@ class TransactionDebugger {
     } else if (error instanceof SendTransactionError) {
       errorType = 'SEND_ERROR';
       suggestion = 'Transaction failed on-chain. Check transaction logs';
+    } else if (error.message?.includes('InstructionError') && error.message?.includes('Custom":101')) {
+      errorType = 'PROGRAM_ERROR';
+      suggestion = 'Invalid account data or account not initialized. Check if the takeover is properly set up and your token account exists.';
+    } else if (error.message?.includes('simulation failed')) {
+      errorType = 'SIMULATION_ERROR';
+      suggestion = 'Transaction would fail on-chain. Check account states and instruction parameters.';
     }
 
     return {

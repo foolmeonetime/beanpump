@@ -1,3 +1,4 @@
+// app/claims/page.tsx - Enhanced with comprehensive debugging while preserving all functionality
 "use client";
 
 import { useEffect, useState } from "react";
@@ -128,9 +129,12 @@ class ClaimsDebugger {
 
         console.log('✅ Claims fetched successfully:', data);
 
+        // Handle both data formats: {claims: []} and {data: {claims: []}}
+        const claims = data.claims || data.data?.claims || [];
+
         return {
           success: true,
-          claims: data.claims || [],
+          claims: claims,
           debugInfo
         };
 
@@ -175,10 +179,21 @@ class ClaimsDebugger {
     for (const endpoint of endpoints) {
       const startTime = Date.now();
       try {
-        const response = await fetch(endpoint, { 
-          method: 'HEAD',
-          cache: 'no-store'
-        });
+        // Try HEAD first, fall back to GET with limit
+        let response;
+        try {
+          response = await fetch(endpoint, { 
+            method: 'HEAD',
+            cache: 'no-store'
+          });
+        } catch (headError) {
+          // HEAD failed, try GET with minimal query
+          response = await fetch(`${endpoint}?limit=1`, { 
+            method: 'GET',
+            cache: 'no-store'
+          });
+        }
+        
         results[endpoint] = {
           status: response.ok ? 'ok' : 'error',
           responseTime: Date.now() - startTime,
