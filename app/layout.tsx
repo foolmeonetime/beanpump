@@ -1,3 +1,4 @@
+// app/layout.tsx - Updated with diagnostic panel while preserving ALL existing functionality
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
@@ -5,6 +6,7 @@ import { Toaster } from '@/components/ui/toaster';
 import { WalletContextProvider } from "@/app/providers/wallet-provider";
 import { Header } from '@/components/header';
 import { ThemeProvider } from '@/components/theme-provider';
+import { DiagnosticHandler } from '@/components/diagnostic-handler';
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -45,7 +47,7 @@ export default function RootLayout({
                 {children}
               </main>
               
-              {/* Footer */}
+              {/* Footer - PRESERVED from your original */}
               <footer className="bg-background border-t border-border mt-16">
                 <div className="container mx-auto px-4 py-8">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-8">
@@ -96,9 +98,12 @@ export default function RootLayout({
                   </div>
                 </div>
               </footer>
+
+              {/* NEW: Diagnostic Panel - Shows in development or with debug=true */}
+              <DiagnosticHandler />
             </div>
             
-            {/* Toast Notifications */}
+            {/* Toast Notifications - PRESERVED in original position */}
             <Toaster />
           </WalletContextProvider>
         </ThemeProvider>

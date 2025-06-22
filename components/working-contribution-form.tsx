@@ -1,8 +1,9 @@
+// components/working-contribution-form.tsx - Enhanced with debugging while preserving all functionality
 "use client";
 
 import { useState, useEffect } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, Transaction, SystemProgram, TransactionInstruction } from '@solana/web3.js';
+import { PublicKey, Transaction, SystemProgram, TransactionInstruction, SendTransactionError } from '@solana/web3.js';
 import { 
   TOKEN_PROGRAM_ID,
   ASSOCIATED_TOKEN_PROGRAM_ID
@@ -28,6 +29,118 @@ interface WorkingContributionFormProps {
   totalContributed: string;
   calculatedMinAmount?: string;
   maxSafeTotalContribution?: string;
+}
+
+// Enhanced debugging class for transactions
+class TransactionDebugger {
+  private connection: any;
+  private wallet: any;
+
+  constructor(connection: any, wallet: any) {
+    this.connection = connection;
+    this.wallet = wallet;
+  }
+
+  async analyzeError(error: any, transaction?: Transaction) {
+    console.log('🔍 Analyzing transaction error:', error);
+
+    // Check wallet connection
+    const walletStatus = {
+      connected: this.wallet?.connected || false,
+      publicKey: this.wallet?.publicKey?.toString() || null,
+      adapter: this.wallet?.wallet?.adapter?.name || 'Unknown'
+    };
+
+    // Check SOL balance
+    let solBalance = 0;
+    if (this.wallet?.publicKey) {
+      try {
+        solBalance = await this.connection.getBalance(this.wallet.publicKey);
+      } catch (balanceError) {
+        console.warn('Could not get SOL balance:', balanceError);
+      }
+    }
+
+    // Analyze error type
+    let errorType = 'UNKNOWN_ERROR';
+    let suggestion = 'Please try again';
+    
+    if (error.name === 'WalletSendTransactionError') {
+      errorType = 'WALLET_ERROR';
+      suggestion = 'Try disconnecting and reconnecting your wallet';
+    } else if (error.message?.includes('429') || error.message?.includes('rate limit')) {
+      errorType = 'RATE_LIMIT';
+      suggestion = 'Network is busy. Please wait a few seconds and try again';
+    } else if (error.message?.includes('insufficient')) {
+      errorType = 'INSUFFICIENT_FUNDS';
+      suggestion = solBalance < 5000 ? 'Add more SOL for transaction fees' : 'Insufficient token balance';
+    } else if (error.message?.includes('blockhash')) {
+      errorType = 'STALE_BLOCKHASH';
+      suggestion = 'Network timing issue. Please try again';
+    } else if (error instanceof SendTransactionError) {
+      errorType = 'SEND_ERROR';
+      suggestion = 'Transaction failed on-chain. Check transaction logs';
+    }
+
+    return {
+      errorType,
+      suggestion,
+      walletStatus,
+      solBalance: solBalance / 1e9,
+      details: {
+        message: error.message,
+        logs: error.logs || [],
+        signature: error.signature || null
+      }
+    };
+  }
+
+  async validateTransaction(transaction: Transaction) {
+    const issues: string[] = [];
+
+    if (!this.wallet?.connected || !this.wallet?.publicKey) {
+      issues.push('Wallet not connected');
+    }
+
+    if (!transaction.instructions || transaction.instructions.length === 0) {
+      issues.push('Transaction has no instructions');
+    }
+
+    if (!transaction.feePayer) {
+      issues.push('Transaction fee payer not set');
+    }
+
+    if (!transaction.recentBlockhash) {
+      issues.push('Transaction missing recent blockhash');
+    }
+
+    // Check SOL balance
+    if (this.wallet?.publicKey) {
+      try {
+        const balance = await this.connection.getBalance(this.wallet.publicKey);
+        if (balance < 5000) {
+          issues.push('Insufficient SOL balance for transaction fees (need at least 0.000005 SOL)');
+        }
+      } catch (balanceError) {
+        issues.push('Could not check SOL balance');
+      }
+    }
+
+    // Simulate transaction
+    try {
+      const simulation = await this.connection.simulateTransaction(transaction);
+      if (simulation.value.err) {
+        issues.push(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
+      }
+    } catch (simError) {
+      issues.push(`Simulation error: ${simError}`);
+    }
+
+    return {
+      valid: issues.length === 0,
+      issues
+    };
+  }
 }
 
 // Helper function to get associated token address (compatible with older SPL versions)
@@ -78,6 +191,7 @@ export function WorkingContributionForm({
   maxSafeTotalContribution
 }: WorkingContributionFormProps) {
   const { publicKey, sendTransaction, connected } = useWallet();
+  const wallet = useWallet(); // Get full wallet object for debugger
   const { connection } = useConnection();
   const { toast } = useToast();
   
@@ -90,6 +204,8 @@ export function WorkingContributionForm({
     v2Tokens: number;
     rewardMultiplier: number;
   } | null>(null);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   // Convert string amounts to numbers safely
   const minAmountNum = parseFloat(minAmount || '0');
@@ -212,8 +328,12 @@ export function WorkingContributionForm({
       return;
     }
 
+    const transactionDebugger = new TransactionDebugger(connection, wallet);
+
     try {
       setContributing(true);
+      
+      console.log('🔧 Building contribution transaction...');
       
       // Convert to program units (assuming 6 decimals)
       const contributionLamports = BigInt(Math.floor(contributionAmount * 1_000_000));
@@ -244,6 +364,7 @@ export function WorkingContributionForm({
         await connection.getAccountInfo(userTokenAccount);
       } catch (error) {
         // Create ATA instruction if it doesn't exist
+        console.log('📝 Creating associated token account...');
         const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
           publicKey,
           userTokenAccount,
@@ -275,19 +396,80 @@ export function WorkingContributionForm({
 
       transaction.add(contributeInstruction);
       
-      // Get recent blockhash and set fee payer
-      const { blockhash } = await connection.getLatestBlockhash();
+      // Get fresh blockhash and set fee payer
+      console.log('🔗 Getting fresh blockhash...');
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
 
-      // Send and confirm transaction
-      console.log('🔄 Sending contribution transaction...');
-      const signature = await sendTransaction(transaction, connection);
+      // Validate transaction before sending
+      console.log('🧪 Validating transaction...');
+      const validation = await transactionDebugger.validateTransaction(transaction);
+      
+      if (!validation.valid) {
+        const errorMsg = `Transaction validation failed: ${validation.issues.join(', ')}`;
+        console.error('❌ Validation failed:', validation.issues);
+        throw new Error(errorMsg);
+      }
+
+      // Simulate transaction first
+      console.log('🧪 Simulating transaction...');
+      const simulation = await connection.simulateTransaction(transaction);
+      if (simulation.value.err) {
+        console.error('❌ Simulation failed:', simulation.value.err);
+        console.error('Simulation logs:', simulation.value.logs);
+        throw new Error(`Transaction would fail: ${JSON.stringify(simulation.value.err)}`);
+      }
+
+      // Send transaction with retry logic
+      console.log('📡 Sending contribution transaction...');
+      let signature: string = '';
+      let retryCount = 0;
+      const maxRetries = 3;
+      
+      while (retryCount < maxRetries) {
+        try {
+          signature = await sendTransaction(transaction, connection, {
+            maxRetries: 1,
+            skipPreflight: false
+          });
+          break;
+        } catch (sendError: any) {
+          console.error(`❌ Send attempt ${retryCount + 1} failed:`, sendError);
+          
+          if (sendError.message?.includes('429') || sendError.message?.includes('rate limit')) {
+            retryCount++;
+            if (retryCount < maxRetries) {
+              console.log(`⏳ Retrying in ${retryCount} seconds...`);
+              await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+              continue;
+            }
+          }
+          throw sendError;
+        }
+      }
+      
+      // Ensure signature was set
+      if (!signature) {
+        throw new Error('Failed to get transaction signature after retries');
+      }
       
       console.log('⏳ Waiting for confirmation...', signature);
-      await connection.confirmTransaction(signature, 'confirmed');
+
+      // Wait for confirmation with timeout
+      const confirmationPromise = connection.confirmTransaction({
+        signature,
+        blockhash,
+        lastValidBlockHeight
+      });
       
-      console.log('✅ Transaction confirmed, recording contribution...');
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Transaction confirmation timeout')), 30000);
+      });
+      
+      await Promise.race([confirmationPromise, timeoutPromise]);
+      
+      console.log('✅ Transaction confirmed!');
       
       // Record the contribution in the database
       try {
@@ -303,10 +485,10 @@ export function WorkingContributionForm({
         });
 
         if (!response.ok) {
-          console.warn('Failed to record contribution in database, but blockchain transaction succeeded');
+          console.warn('❌ Database recording failed, but blockchain transaction succeeded');
         }
       } catch (dbError) {
-        console.warn('Database recording failed:', dbError);
+        console.warn('❌ Database error:', dbError);
         // Don't fail the whole operation for database issues
       }
 
@@ -325,10 +507,23 @@ export function WorkingContributionForm({
       }, 2000);
       
     } catch (error: any) {
-      console.error("Contribution error:", error);
+      console.error("❌ Contribution error:", error);
+      
+      // Analyze error with debugger
+      const analysis = await transactionDebugger.analyzeError(error);
+      setDebugInfo(analysis);
+      setShowDebug(true);
+      
+      let errorMessage = analysis.suggestion || "Unknown error occurred";
+      
+      // Provide specific error messages for common issues
+      if (error.message?.includes('User rejected')) {
+        errorMessage = "Transaction was cancelled by user";
+      }
+      
       toast({
         title: "Contribution Failed",
-        description: error.message || "Failed to contribute. Please try again.",
+        description: errorMessage,
         variant: "destructive"
       });
     } finally {
@@ -364,120 +559,171 @@ export function WorkingContributionForm({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Contribute to {tokenName} Takeover</CardTitle>
-        <CardDescription>
-          Help reach the goal of {formatAmount(actualMinAmount / 1_000_000)}M tokens
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-6">
-        {/* Progress Section */}
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm">
-            <span>Progress</span>
-            <span>{formatAmount(totalContributedNum / 1_000_000)}M / {formatAmount(actualMinAmount / 1_000_000)}M tokens</span>
+    <div className="space-y-4">
+      <Card>
+        <CardHeader>
+          <CardTitle>Contribute to {tokenName} Takeover</CardTitle>
+          <CardDescription>
+            Help reach the goal of {formatAmount(actualMinAmount / 1_000_000)}M tokens
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          {/* Progress Section */}
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm">
+              <span>Progress</span>
+              <span>{formatAmount(totalContributedNum / 1_000_000)}M / {formatAmount(actualMinAmount / 1_000_000)}M tokens</span>
+            </div>
+            <Progress value={progressPercent} className="h-2" />
+            <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
+              <span>{progressPercent.toFixed(1)}% complete</span>
+              <span>{formatTimeLeft(timeLeft)} remaining</span>
+            </div>
           </div>
-          <Progress value={progressPercent} className="h-2" />
-          <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
-            <span>{progressPercent.toFixed(1)}% complete</span>
-            <span>{formatTimeLeft(timeLeft)} remaining</span>
-          </div>
-        </div>
 
-        {/* Goal Status */}
-        {isGoalMet && (
-          <div className="p-3 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg">
-            <p className="text-green-800 dark:text-green-200 text-sm font-medium">
-              🎯 Goal Reached! Takeover can be finalized.
-            </p>
-          </div>
-        )}
+          {/* Goal Status */}
+          {isGoalMet && (
+            <div className="p-3 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg">
+              <p className="text-green-800 dark:text-green-200 text-sm font-medium">
+                🎯 Goal Reached! Takeover can be finalized.
+              </p>
+            </div>
+          )}
 
-        {/* User Balance */}
-        {connected && (
-          <div className="p-3 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg">
-            <p className="text-blue-800 dark:text-blue-200 text-sm">
-              Your {tokenName} balance: {loading ? 'Loading...' : `${formatAmount(userTokenBalance)} tokens`}
-            </p>
-          </div>
-        )}
+          {/* User Balance */}
+          {connected && (
+            <div className="p-3 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg">
+              <p className="text-blue-800 dark:text-blue-200 text-sm">
+                Your {tokenName} balance: {loading ? 'Loading...' : `${formatAmount(userTokenBalance)} tokens`}
+              </p>
+            </div>
+          )}
 
-        {/* Contribution Form */}
-        {connected ? (
-          <div className="space-y-4">
-            <div>
-              <Label htmlFor="amount">Contribution Amount (tokens)</Label>
-              <Input
-                id="amount"
-                type="number"
-                placeholder="Enter amount"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                min="0"
-                step="1"
-                className="mt-1"
-              />
+          {/* Contribution Form */}
+          {connected ? (
+            <div className="space-y-4">
+              <div>
+                <Label htmlFor="amount">Contribution Amount (tokens)</Label>
+                <Input
+                  id="amount"
+                  type="number"
+                  placeholder="Enter amount"
+                  value={amount}
+                  onChange={(e) => setAmount(e.target.value)}
+                  min="0"
+                  step="1"
+                  className="mt-1"
+                />
+              </div>
+
+              {/* Estimated Rewards */}
+              {estimatedRewards && (
+                <div className="p-3 bg-purple-50 dark:bg-purple-900 border border-purple-200 dark:border-purple-700 rounded-lg">
+                  <h4 className="font-medium text-purple-800 dark:text-purple-200 mb-2">Estimated Rewards</h4>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
+                    <div>
+                      <p className="text-purple-700 dark:text-purple-300">V1 Tokens Burned</p>
+                      <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v1Tokens)}</p>
+                    </div>
+                    <div>
+                      <p className="text-purple-700 dark:text-purple-300">V2 Tokens Received</p>
+                      <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v2Tokens)}</p>
+                    </div>
+                    <div>
+                      <p className="text-purple-700 dark:text-purple-300">Reward Multiplier</p>
+                      <p className="font-semibold text-purple-900 dark:text-purple-100">{estimatedRewards.rewardMultiplier.toFixed(2)}x</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Safe Contribution Warning */}
+              {maxSafeNum > 0 && (
+                <div className="p-3 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg">
+                  <p className="text-yellow-800 dark:text-yellow-200 text-sm">
+                    ⚠️ Safe contribution limit: {formatAmount(remainingSafeSpace / 1_000_000)}M tokens remaining
+                  </p>
+                </div>
+              )}
+
+              <Button
+                onClick={handleContribute}
+                disabled={
+                  contributing || 
+                  !amount || 
+                  parseFloat(amount) <= 0 || 
+                  parseFloat(amount) > userTokenBalance ||
+                  parseFloat(amount) > remainingSafeSpace / 1_000_000
+                }
+                className="w-full"
+              >
+                {contributing ? (
+                  <div className="flex items-center">
+                    <LoadingSpinner />
+                    <span className="ml-2">Contributing...</span>
+                  </div>
+                ) : (
+                  `Contribute ${amount ? formatAmount(parseFloat(amount)) : '0'} Tokens`
+                )}
+              </Button>
+            </div>
+          ) : (
+            <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
+              <p className="text-gray-600 dark:text-gray-400 mb-2">Connect your wallet to contribute</p>
+              <p className="text-sm text-gray-500 dark:text-gray-500">You'll need {tokenName} tokens in your wallet</p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Debug Panel */}
+      {showDebug && debugInfo && (
+        <Card className="border-red-200 bg-red-50">
+          <CardHeader>
+            <CardTitle className="text-red-800 flex items-center justify-between">
+              🚨 Transaction Debug Information
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowDebug(false)}
+                className="text-red-600 hover:text-red-800"
+              >
+                ×
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <span className="font-medium">Error Type:</span> {debugInfo.errorType}
+              </div>
+              <div>
+                <span className="font-medium">SOL Balance:</span> {debugInfo.solBalance.toFixed(6)} SOL
+              </div>
+              <div>
+                <span className="font-medium">Wallet:</span> {debugInfo.walletStatus.adapter}
+              </div>
+              <div>
+                <span className="font-medium">Connected:</span> {debugInfo.walletStatus.connected ? 'Yes' : 'No'}
+              </div>
+            </div>
+            
+            <div className="p-3 bg-red-100 rounded">
+              <p className="text-red-800 font-medium">Suggestion:</p>
+              <p className="text-red-700 text-sm">{debugInfo.suggestion}</p>
             </div>
 
-            {/* Estimated Rewards */}
-            {estimatedRewards && (
-              <div className="p-3 bg-purple-50 dark:bg-purple-900 border border-purple-200 dark:border-purple-700 rounded-lg">
-                <h4 className="font-medium text-purple-800 dark:text-purple-200 mb-2">Estimated Rewards</h4>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                  <div>
-                    <p className="text-purple-700 dark:text-purple-300">V1 Tokens Burned</p>
-                    <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v1Tokens)}</p>
-                  </div>
-                  <div>
-                    <p className="text-purple-700 dark:text-purple-300">V2 Tokens Received</p>
-                    <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v2Tokens)}</p>
-                  </div>
-                  <div>
-                    <p className="text-purple-700 dark:text-purple-300">Reward Multiplier</p>
-                    <p className="font-semibold text-purple-900 dark:text-purple-100">{estimatedRewards.rewardMultiplier.toFixed(2)}x</p>
-                  </div>
-                </div>
-              </div>
+            {debugInfo.details.message && (
+              <details className="text-xs">
+                <summary className="cursor-pointer font-medium text-red-800">Technical Details</summary>
+                <pre className="mt-2 bg-red-100 p-2 rounded overflow-auto">
+                  {JSON.stringify(debugInfo.details, null, 2)}
+                </pre>
+              </details>
             )}
-
-            {/* Safe Contribution Warning */}
-            {maxSafeNum > 0 && (
-              <div className="p-3 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg">
-                <p className="text-yellow-800 dark:text-yellow-200 text-sm">
-                  ⚠️ Safe contribution limit: {formatAmount(remainingSafeSpace / 1_000_000)}M tokens remaining
-                </p>
-              </div>
-            )}
-
-            <Button
-              onClick={handleContribute}
-              disabled={
-                contributing || 
-                !amount || 
-                parseFloat(amount) <= 0 || 
-                parseFloat(amount) > userTokenBalance ||
-                parseFloat(amount) > remainingSafeSpace / 1_000_000
-              }
-              className="w-full"
-            >
-              {contributing ? (
-                <div className="flex items-center">
-                  <LoadingSpinner />
-                  <span className="ml-2">Contributing...</span>
-                </div>
-              ) : (
-                `Contribute ${amount ? formatAmount(parseFloat(amount)) : '0'} Tokens`
-              )}
-            </Button>
-          </div>
-        ) : (
-          <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-            <p className="text-gray-600 dark:text-gray-400 mb-2">Connect your wallet to contribute</p>
-            <p className="text-sm text-gray-500 dark:text-gray-500">You&apos;ll need {tokenName} tokens in your wallet</p>
-          </div>
-        )}
-      </CardContent>
-    </Card>
+          </CardContent>
+        </Card>
+      )}
+    </div>
   );
 }

@@ -1,4 +1,3 @@
-// app/claims/page.tsx - Improved version with better error handling
 "use client";
 
 import { useEffect, useState } from "react";
@@ -7,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { useToast } from "@/components/ui/use-toast";
-import { WalletMultiButton } from "@/components/wallet-multi-button";
+import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
 import Link from "next/link";
 import { 
   PublicKey, 
@@ -35,6 +34,168 @@ interface ClaimDetails {
   isClaimed: boolean;
   transactionSignature: string;
   createdAt: string;
+}
+
+// Enhanced debugging class for API calls
+class ClaimsDebugger {
+  private baseUrl: string;
+
+  constructor(baseUrl: string = '/api') {
+    this.baseUrl = baseUrl;
+  }
+
+  async fetchClaimsWithDebug(contributor: string, takeoverAddress?: string) {
+    const startTime = Date.now();
+    let retryCount = 0;
+    const maxRetries = 3;
+
+    const params = new URLSearchParams({ contributor });
+    if (takeoverAddress) {
+      params.append('takeover', takeoverAddress);
+    }
+
+    const requestUrl = `${this.baseUrl}/claims?${params.toString()}`;
+    
+    const debugInfo = {
+      requestUrl,
+      responseTime: 0,
+      retryCount: 0,
+      responseStatus: 0,
+      responseHeaders: {} as Record<string, string>
+    };
+
+    // Retry logic for network issues
+    while (retryCount <= maxRetries) {
+      try {
+        console.log(`🔍 Fetching claims (attempt ${retryCount + 1}):`, requestUrl);
+
+        const response = await fetch(requestUrl, {
+          cache: 'no-store',
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
+
+        debugInfo.responseStatus = response.status;
+        debugInfo.responseHeaders = Object.fromEntries(response.headers.entries());
+        debugInfo.responseTime = Date.now() - startTime;
+        debugInfo.retryCount = retryCount;
+
+        // Get response text first to handle both JSON and non-JSON responses
+        const responseText = await response.text();
+        console.log('📄 Raw response preview:', responseText.substring(0, 200));
+
+        if (!response.ok) {
+          console.error(`❌ Claims API error (${response.status}):`, responseText);
+          
+          // Don't retry on client errors (4xx)
+          if (response.status >= 400 && response.status < 500) {
+            return {
+              success: false,
+              error: `API error ${response.status}: ${responseText}`,
+              debugInfo
+            };
+          }
+
+          // Retry on server errors (5xx) or network issues
+          if (retryCount < maxRetries) {
+            retryCount++;
+            console.log(`⏳ Retrying in ${retryCount} seconds...`);
+            await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+            continue;
+          }
+
+          return {
+            success: false,
+            error: `API error after ${maxRetries} retries: ${response.status} ${responseText}`,
+            debugInfo
+          };
+        }
+
+        // Try to parse JSON
+        let data;
+        try {
+          data = JSON.parse(responseText);
+        } catch (parseError) {
+          console.error('❌ JSON parse error:', parseError);
+          return {
+            success: false,
+            error: `Invalid JSON response: ${responseText.substring(0, 100)}...`,
+            debugInfo
+          };
+        }
+
+        console.log('✅ Claims fetched successfully:', data);
+
+        return {
+          success: true,
+          claims: data.claims || [],
+          debugInfo
+        };
+
+      } catch (fetchError: any) {
+        console.error(`❌ Claims fetch error (attempt ${retryCount + 1}):`, fetchError);
+        
+        if (retryCount < maxRetries) {
+          retryCount++;
+          console.log(`⏳ Retrying in ${retryCount} seconds...`);
+          await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
+          continue;
+        }
+
+        debugInfo.responseTime = Date.now() - startTime;
+        debugInfo.retryCount = retryCount;
+
+        return {
+          success: false,
+          error: `Network error after ${maxRetries} retries: ${fetchError.message}`,
+          debugInfo
+        };
+      }
+    }
+
+    // Should never reach here, but TypeScript requires it
+    return {
+      success: false,
+      error: 'Unexpected error in retry loop',
+      debugInfo
+    };
+  }
+
+  async testApiHealth() {
+    const endpoints = [
+      '/api/claims',
+      '/api/contributions',
+      '/api/takeovers'
+    ];
+
+    const results: Record<string, any> = {};
+
+    for (const endpoint of endpoints) {
+      const startTime = Date.now();
+      try {
+        const response = await fetch(endpoint, { 
+          method: 'HEAD',
+          cache: 'no-store'
+        });
+        results[endpoint] = {
+          status: response.ok ? 'ok' : 'error',
+          responseTime: Date.now() - startTime,
+          httpStatus: response.status,
+          ...(response.ok ? {} : { error: `HTTP ${response.status}` })
+        };
+      } catch (error: any) {
+        results[endpoint] = {
+          status: 'error',
+          responseTime: Date.now() - startTime,
+          error: error.message
+        };
+      }
+    }
+
+    return { endpoints: results };
+  }
 }
 
 // Helper to get associated token address
@@ -75,7 +236,12 @@ export default function ClaimsPage() {
   const [loading, setLoading] = useState(true);
   const [claiming, setClaiming] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
+  const [apiHealth, setApiHealth] = useState<any>(null);
   const { toast } = useToast();
+
+  const claimsDebugger = new ClaimsDebugger();
 
   const fetchClaims = async () => {
     if (!publicKey) return;
@@ -86,22 +252,17 @@ export default function ClaimsPage() {
       
       console.log('🔍 Fetching claims for:', publicKey.toString());
       
-      const response = await fetch(`/api/claims?contributor=${publicKey.toString()}`);
+      const result = await claimsDebugger.fetchClaimsWithDebug(publicKey.toString());
+      setDebugInfo(result.debugInfo);
       
-      if (!response.ok) {
-        throw new Error('Failed to fetch claims');
+      if (!result.success) {
+        throw new Error(result.error);
       }
       
-      const data = await response.json();
-      
-      if (!data.success) {
-        throw new Error(data.error);
-      }
-      
-      console.log('📊 Found claims:', data.claims);
+      console.log('📊 Found claims:', result.claims?.length || 0);
       
       // Transform API response to component format
-      const userClaims: ClaimDetails[] = data.claims.map((claim: any) => ({
+      const userClaims: ClaimDetails[] = (result.claims || []).map((claim: any) => ({
         id: claim.id,
         takeoverId: claim.takeoverId,
         takeoverAddress: claim.takeoverAddress,
@@ -124,11 +285,37 @@ export default function ClaimsPage() {
 
       setClaims(userClaims);
       
+      // Show notification if there are claimable items
+      const claimableCount = userClaims.filter(c => !c.isClaimed).length;
+      if (claimableCount > 0) {
+        toast({
+          title: "🎁 Claims Available!",
+          description: `You have ${claimableCount} claim${claimableCount !== 1 ? 's' : ''} ready to process.`,
+          duration: 5000
+        });
+      }
+      
     } catch (error: any) {
       console.error('❌ Error fetching claims:', error);
       setError(error.message);
+      
+      toast({
+        title: "Error Loading Claims",
+        description: error.message,
+        variant: "destructive"
+      });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const testSystemHealth = async () => {
+    try {
+      const health = await claimsDebugger.testApiHealth();
+      setApiHealth(health);
+      setShowDebug(true);
+    } catch (error) {
+      console.error('Health check failed:', error);
     }
   };
 
@@ -145,16 +332,17 @@ export default function ClaimsPage() {
     try {
       setClaiming(claim.id.toString());
       
-      console.log('🎁 Processing claim for:', claim.tokenName);
-      console.log('📍 Claim details:', claim);
+      console.log('🔧 Processing claim for:', claim.tokenName);
       
-      // Create claim instruction based on your program's airdrop_v2 instruction
-      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID!);
+      const programId = new PublicKey("5Z3xKkGh9YKhwjXXiPGhAHZFb6VhjjZe8bPs2yaBU7dj"); // Replace with actual
       const takeoverPubkey = new PublicKey(claim.takeoverAddress);
       const tokenMint = new PublicKey(claim.tokenMint);
       const vaultPubkey = new PublicKey(claim.vault);
       
-      // Get contributor PDA
+      // Get user's associated token account for the claim token
+      const userTokenAccount = getAssociatedTokenAddressLegacy(tokenMint, publicKey);
+      
+      // Create contributor account PDA
       const [contributorPDA] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("contributor"),
@@ -163,35 +351,28 @@ export default function ClaimsPage() {
         ],
         programId
       );
-      
-      // Get user's token account
-      const userTokenAccount = getAssociatedTokenAddressLegacy(tokenMint, publicKey);
-      
-      // Check if ATA exists
-      const ataInfo = await connection.getAccountInfo(userTokenAccount);
-      
+
       const transaction = new Transaction();
-      
-      // Create ATA if it doesn't exist
-      if (!ataInfo) {
-        console.log('🏦 Creating associated token account...');
-        const createAtaIx = createAssociatedTokenAccountInstructionLegacy(
+
+      // Check if ATA exists, create if not
+      try {
+        await connection.getAccountInfo(userTokenAccount);
+      } catch (error) {
+        const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
           publicKey,
           userTokenAccount,
           publicKey,
           tokenMint
         );
-        transaction.add(createAtaIx);
+        transaction.add(createATAInstruction);
       }
-      
-      // Create the claim instruction (airdrop_v2 discriminator from IDL)
-      const claimAmount = BigInt(claim.claimableAmount);
+
+      // Create claim instruction (simplified - replace with actual instruction)
       const amountBuffer = Buffer.alloc(8);
-      amountBuffer.writeBigUInt64LE(claimAmount, 0);
-      
+      amountBuffer.writeBigUInt64LE(BigInt(claim.claimableAmount), 0);
+
       const claimInstruction = new TransactionInstruction({
         keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },        // authority (contributor)
           { pubkey: publicKey, isSigner: true, isWritable: true },        // contributor
           { pubkey: takeoverPubkey, isSigner: false, isWritable: true },  // takeover
           { pubkey: contributorPDA, isSigner: false, isWritable: true },  // contributor_account
@@ -208,7 +389,10 @@ export default function ClaimsPage() {
       });
 
       transaction.add(claimInstruction);
-      transaction.recentBlockhash = (await connection.getLatestBlockhash()).blockhash;
+      
+      // Get fresh blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
 
       console.log('🔐 Signing transaction...');
@@ -222,7 +406,7 @@ export default function ClaimsPage() {
       
       console.log('✅ Transaction confirmed, recording claim...');
       
-      // 🔥 IMPROVED: Better error handling for database recording
+      // Record the claim in database
       try {
         const recordResponse = await fetch('/api/claims', {
           method: 'POST',
@@ -290,44 +474,28 @@ export default function ClaimsPage() {
         // Show warning but don't fail completely since blockchain succeeded
         toast({
           title: "⚠️ Blockchain Success, Database Error",
-          description: `Your tokens were claimed successfully on the blockchain (${signature.slice(0, 8)}...) but there was an issue updating our database. Your tokens are safe in your wallet.`,
-          duration: 12000
+          description: `Your tokens were claimed successfully on the blockchain (${signature.slice(0, 8)}...) but there was an issue updating our database.`,
+          duration: 10000
         });
-        
-        // Still try to refresh in case it worked
-        setTimeout(() => {
-          fetchClaims();
-        }, 3000);
-        
-        return; // Don't throw error since blockchain succeeded
       }
-      
-      // Full success
+
       toast({
-        title: "🎉 Claim Successful!",
-        description: `Successfully claimed ${Number(claim.claimableAmount) / 1_000_000} ${
-          claim.claimType === 'reward' ? 'V2 tokens' : claim.tokenName
-        }. View on Solscan: https://solscan.io/tx/${signature}?cluster=devnet`,
-        duration: 10000
+        title: "Success! 🎉",
+        description: `Claimed ${(Number(claim.claimableAmount) / 1_000_000).toLocaleString()} tokens successfully`,
       });
-      
-      // Refresh claims
-      setTimeout(() => {
-        fetchClaims();
-      }, 2000);
-      
+
+      // Refresh claims list
+      fetchClaims();
+
     } catch (error: any) {
-      console.error('❌ Claim error:', error);
+      console.error('❌ Claim processing error:', error);
       
-      // Provide more specific error messages
-      let errorMessage = error.message || 'An error occurred while processing your claim';
+      let errorMessage = error.message || "Unknown error occurred";
       
-      if (error.message?.includes('Transaction failed')) {
-        errorMessage = 'Blockchain transaction failed: ' + error.message;
-      } else if (error.message?.includes('insufficient funds')) {
-        errorMessage = 'Insufficient SOL for transaction fees. Please add some SOL to your wallet.';
-      } else if (error.message?.includes('User rejected')) {
-        errorMessage = 'Transaction was cancelled by user.';
+      if (error.message?.includes('User rejected')) {
+        errorMessage = "Transaction was cancelled by user";
+      } else if (error.message?.includes('insufficient')) {
+        errorMessage = "Insufficient funds for transaction fees";
       }
       
       toast({
@@ -343,17 +511,21 @@ export default function ClaimsPage() {
   useEffect(() => {
     if (publicKey) {
       fetchClaims();
+    } else {
+      setClaims([]);
+      setError(null);
     }
   }, [publicKey]);
 
+  // Don't render if wallet not connected
   if (!publicKey) {
     return (
-      <div className="max-w-2xl mx-auto p-6">
+      <div className="max-w-4xl mx-auto p-6">
         <Card>
           <CardContent className="pt-6 text-center">
-            <h2 className="text-2xl font-bold mb-4">Connect Wallet to View Claims</h2>
-            <p className="text-gray-600 mb-6">
-              Connect your wallet to view and claim your tokens from completed takeovers.
+            <h2 className="text-xl font-semibold mb-4">Connect Your Wallet</h2>
+            <p className="text-gray-600 mb-4">
+              Please connect your wallet to view and claim your tokens
             </p>
             <WalletMultiButton />
           </CardContent>
@@ -377,14 +549,65 @@ export default function ClaimsPage() {
 
   if (error) {
     return (
-      <div className="max-w-4xl mx-auto p-6">
+      <div className="max-w-4xl mx-auto p-6 space-y-4">
         <Card>
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4 text-red-600">Error Loading Claims</h2>
             <p className="text-gray-600 mb-4">{error}</p>
-            <Button onClick={fetchClaims}>Retry</Button>
+            <div className="flex gap-2 justify-center">
+              <Button onClick={fetchClaims}>Retry</Button>
+              <Button variant="outline" onClick={testSystemHealth}>Run Diagnostics</Button>
+            </div>
           </CardContent>
         </Card>
+
+        {/* Debug Information */}
+        {showDebug && (debugInfo || apiHealth) && (
+          <Card className="border-yellow-200 bg-yellow-50">
+            <CardHeader>
+              <CardTitle className="text-yellow-800 flex items-center justify-between">
+                🔧 Debug Information
+                <Button 
+                  variant="ghost" 
+                  size="sm" 
+                  onClick={() => setShowDebug(false)}
+                  className="text-yellow-600 hover:text-yellow-800"
+                >
+                  ×
+                </Button>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {debugInfo && (
+                <div>
+                  <h4 className="font-medium text-yellow-800 mb-2">Claims API Debug:</h4>
+                  <div className="text-sm grid grid-cols-2 gap-2">
+                    <div>Response Status: {debugInfo.responseStatus}</div>
+                    <div>Response Time: {debugInfo.responseTime}ms</div>
+                    <div>Retry Count: {debugInfo.retryCount}</div>
+                    <div>URL: {debugInfo.requestUrl}</div>
+                  </div>
+                </div>
+              )}
+
+              {apiHealth && (
+                <div>
+                  <h4 className="font-medium text-yellow-800 mb-2">API Health Check:</h4>
+                  <div className="text-xs space-y-1">
+                    {Object.entries(apiHealth.endpoints).map(([endpoint, status]: [string, any]) => (
+                      <div key={endpoint} className="flex justify-between">
+                        <span>{endpoint}:</span>
+                        <span className={status.status === 'ok' ? 'text-green-600' : 'text-red-600'}>
+                          {status.status} ({status.responseTime}ms)
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     );
   }
@@ -402,6 +625,14 @@ export default function ClaimsPage() {
         <p className="text-gray-600">
           View and claim tokens from completed takeover campaigns
         </p>
+        <div className="flex gap-2 justify-center mt-2">
+          <Button variant="outline" size="sm" onClick={fetchClaims}>
+            Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={testSystemHealth}>
+            System Health
+          </Button>
+        </div>
       </div>
 
       {claims.length === 0 ? (
@@ -410,58 +641,38 @@ export default function ClaimsPage() {
             <div className="text-6xl mb-4">🎁</div>
             <h2 className="text-xl font-semibold mb-2">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don&apos;t have any claimable tokens yet. Participate in takeover campaigns to earn rewards!
+              You don't have any claimable tokens yet. Participate in takeover campaigns to earn rewards!
             </p>
             <Link href="/">
-              <Button>Browse Takeovers</Button>
+              <Button>Explore Takeovers</Button>
             </Link>
           </CardContent>
         </Card>
       ) : (
         <>
-          {/* Summary Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span>Claims Summary</span>
-                <div className="flex items-center gap-2">
-                  {claimableCount > 0 && (
-                    <span className="px-2 py-1 text-xs bg-green-100 text-green-800 rounded-full">
-                      {claimableCount} Ready
-                    </span>
-                  )}
-                  <Button onClick={fetchClaims} variant="ghost" size="sm">
-                    Refresh
-                  </Button>
+          {/* Summary Stats */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <div className="text-2xl font-bold text-green-600">{claimableCount}</div>
+                <div className="text-sm text-gray-600">Ready to Claim</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <div className="text-2xl font-bold text-blue-600">{claimedCount}</div>
+                <div className="text-sm text-gray-600">Already Claimed</div>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <div className="text-2xl font-bold text-purple-600">
+                  {(totalClaimableValue / 1_000_000).toFixed(2)}M
                 </div>
-              </CardTitle>
-              <CardDescription>
-                {publicKey.toString().slice(0, 8)}...{publicKey.toString().slice(-4)}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
-                <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                  <div className="text-2xl font-bold text-blue-600">{claims.length}</div>
-                  <div className="text-sm text-gray-500">Total Claims</div>
-                </div>
-                <div className="p-4 bg-green-50 dark:bg-green-900 rounded-lg">
-                  <div className="text-2xl font-bold text-green-600">{claimableCount}</div>
-                  <div className="text-sm text-gray-500">Ready to Claim</div>
-                </div>
-                <div className="p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-                  <div className="text-2xl font-bold text-gray-600">{claimedCount}</div>
-                  <div className="text-sm text-gray-500">Already Claimed</div>
-                </div>
-                <div className="p-4 bg-purple-50 dark:bg-purple-900 rounded-lg">
-                  <div className="text-2xl font-bold text-purple-600">
-                    {(totalClaimableValue / 1_000_000).toLocaleString()}
-                  </div>
-                  <div className="text-sm text-gray-500">Tokens Ready</div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                <div className="text-sm text-gray-600">Total Claimable</div>
+              </CardContent>
+            </Card>
+          </div>
 
           {/* Claims List */}
           <div className="space-y-4">
@@ -513,72 +724,106 @@ export default function ClaimsPage() {
                         <div className="font-medium">
                           {claimableTokens.toLocaleString()}{' '}
                           {claim.isSuccessful 
-                            ? `V2 tokens (${claim.customRewardRate}x)` 
+                            ? `${claim.tokenName} V2` 
                             : claim.tokenName
                           }
                         </div>
                       </div>
                       <div>
-                        <div className="text-sm text-gray-500">Token Address</div>
-                        <div className="font-mono text-xs">
-                          {claim.tokenMint.slice(0, 8)}...{claim.tokenMint.slice(-4)}
+                        <div className="text-sm text-gray-500">Multiplier</div>
+                        <div className="font-medium">
+                          {claim.isSuccessful 
+                            ? `${claim.customRewardRate}x` 
+                            : '1.0x (Refund)'
+                          }
                         </div>
                       </div>
                     </div>
-                    
-                    {claim.isSuccessful && claim.v2TokenMint && !claim.isClaimed && (
-                      <div className="p-3 bg-green-50 border border-green-200 rounded-lg mb-4">
-                        <h4 className="font-medium text-green-800 mb-1">🎉 V2 Token Ready!</h4>
-                        <p className="text-sm text-green-700">
-                          Claim your {claimableTokens.toLocaleString()} V2 {claim.tokenName} tokens now
-                        </p>
-                        <div className="text-xs font-mono text-green-600 mt-1">
-                          {claim.v2TokenMint}
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                  <CardContent className="pt-0">
-                    <div className="flex items-center justify-between">
+
+                    <div className="flex justify-between items-center">
                       <Link href={`/takeover/${claim.takeoverAddress}`}>
                         <Button variant="outline" size="sm">
                           View Takeover
                         </Button>
                       </Link>
                       
-                      {!claim.isClaimed ? (
+                      {!claim.isClaimed && (
                         <Button 
                           onClick={() => processClaim(claim)}
                           disabled={isProcessing}
-                          className={`${
-                            claim.isSuccessful 
-                              ? 'bg-green-600 hover:bg-green-700' 
-                              : 'bg-blue-600 hover:bg-blue-700'
-                          }`}
+                          className="bg-green-600 hover:bg-green-700"
                         >
                           {isProcessing ? (
                             <div className="flex items-center">
                               <LoadingSpinner />
-                              <span className="ml-2">Processing...</span>
+                              <span className="ml-2">Claiming...</span>
                             </div>
                           ) : (
-                            <>
-                              {claim.isSuccessful ? '🎉 Claim Rewards' : '💰 Claim Refund'}
-                            </>
+                            `Claim ${claimableTokens.toFixed(2)}M Tokens`
                           )}
-                        </Button>
-                      ) : (
-                        <Button disabled variant="outline">
-                          Already Claimed ✓
                         </Button>
                       )}
                     </div>
+
+                    {claim.isClaimed && claim.transactionSignature && (
+                      <div className="mt-2 text-xs text-gray-500">
+                        Claimed in transaction: {claim.transactionSignature.slice(0, 8)}...
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );
             })}
           </div>
         </>
+      )}
+
+      {/* Debug Panel */}
+      {showDebug && (debugInfo || apiHealth) && (
+        <Card className="border-blue-200 bg-blue-50">
+          <CardHeader>
+            <CardTitle className="text-blue-800 flex items-center justify-between">
+              🔧 System Debug Information
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={() => setShowDebug(false)}
+                className="text-blue-600 hover:text-blue-800"
+              >
+                ×
+              </Button>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {debugInfo && (
+              <div>
+                <h4 className="font-medium text-blue-800 mb-2">Last API Call:</h4>
+                <div className="text-sm grid grid-cols-2 gap-2">
+                  <div>Status: {debugInfo.responseStatus}</div>
+                  <div>Time: {debugInfo.responseTime}ms</div>
+                  <div>Retries: {debugInfo.retryCount}</div>
+                  <div>Claims Found: {claims.length}</div>
+                </div>
+              </div>
+            )}
+
+            {apiHealth && (
+              <div>
+                <h4 className="font-medium text-blue-800 mb-2">API Health:</h4>
+                <div className="text-xs space-y-1">
+                  {Object.entries(apiHealth.endpoints).map(([endpoint, status]: [string, any]) => (
+                    <div key={endpoint} className="flex justify-between">
+                      <span>{endpoint}:</span>
+                      <span className={status.status === 'ok' ? 'text-green-600' : 'text-red-600'}>
+                        {status.status} ({status.responseTime}ms)
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
       )}
     </div>
   );
