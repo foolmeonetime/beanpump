@@ -1,4 +1,3 @@
-// components/working-contribution-form.tsx - Enhanced with debugging while preserving all functionality
 "use client";
 
 import { useState, useEffect } from 'react';
@@ -15,6 +14,8 @@ import { Label } from '@/components/ui/label';
 import { Progress } from '@/components/ui/progress';
 import { LoadingSpinner } from '@/components/loading-spinner';
 import { useToast } from '@/components/ui/use-toast';
+import { BN } from "@coral-xyz/anchor";
+import { BillionScaleProgramInteractions } from "@/lib/program-interactions";
 
 const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || "5Z3xKkGh9YKhwjXXiPGhAHZFb6VhjjZe8bPs2yaBU7dj");
 
@@ -296,296 +297,233 @@ export function WorkingContributionForm({
   }, [amount, timeLeft]);
 
   const handleContribute = async () => {
-    if (!publicKey || !connected) {
-      toast({
-        title: "Wallet Required",
-        description: "Please connect your wallet to contribute",
-        variant: "destructive"
-      });
-      return;
-    }
+  if (!publicKey || !connected) {
+    toast({
+      title: "Wallet Required",
+      description: "Please connect your wallet to contribute",
+      variant: "destructive"
+    });
+    return;
+  }
 
-    // FIXED: Add takeover state validation matching program constraints
-    if (isFinalized) {
-      toast({
-        title: "Takeover Finalized",
-        description: "This takeover has already been finalized and no longer accepts contributions",
-        variant: "destructive"
-      });
-      return;
-    }
+  const contributionAmount = parseFloat(amount);
+  if (contributionAmount <= 0) {
+    toast({
+      title: "Invalid Amount",
+      description: "Please enter a valid contribution amount", 
+      variant: "destructive"
+    });
+    return;
+  }
 
-    if (!isActive || timeLeft <= 0) {
-      toast({
-        title: "Takeover Expired",
-        description: "This takeover has expired and no longer accepts contributions",
-        variant: "destructive"
-      });
-      return;
-    }
+  if (contributionAmount > userTokenBalance) {
+    toast({
+      title: "Insufficient Balance",
+      description: `You only have ${userTokenBalance.toLocaleString()} tokens`,
+      variant: "destructive"
+    });
+    return;
+  }
 
-    const contributionAmount = parseFloat(amount);
-    if (contributionAmount <= 0) {
-      toast({
-        title: "Invalid Amount",
-        description: "Please enter a valid contribution amount",
-        variant: "destructive"
-      });
-      return;
-    }
+  // Check if contribution would exceed safe limits
+  if (contributionAmount > remainingSafeSpace / 1_000_000) {
+    toast({
+      title: "Amount Too Large", 
+      description: `Maximum safe contribution is ${(remainingSafeSpace / 1_000_000).toLocaleString()} tokens`,
+      variant: "destructive"
+    });
+    return;
+  }
 
-    if (contributionAmount > userTokenBalance) {
-      toast({
-        title: "Insufficient Balance",
-        description: `You only have ${userTokenBalance.toLocaleString()} tokens`,
-        variant: "destructive"
-      });
-      return;
-    }
-
-    // FIXED: Add billion-scale validation matching program logic
-    const contributionLamports = Math.floor(contributionAmount * 1_000_000); // Convert to lamports (6 decimals)
+  try {
+    setContributing(true);
     
-    // Program constraint: amount <= 100M per contribution 
-    if (contributionLamports > 100_000_000 * 1_000_000) {
-      toast({
-        title: "Amount Too Large",
-        description: "Maximum contribution is 100M tokens per transaction for billion-scale safety",
-        variant: "destructive"
-      });
-      return;
-    }
-
-    // Check remaining safe space (matching program overflow protection)
-    if (contributionAmount > remainingSafeSpace / 1_000_000) {
-      toast({
-        title: "Amount Exceeds Safe Limit",
-        description: `Maximum safe contribution is ${(remainingSafeSpace / 1_000_000).toLocaleString()} tokens to prevent overflow`,
-        variant: "destructive"
-      });
-      return;
-    }
-
-    const transactionDebugger = new TransactionDebugger(connection, wallet);
-
+    console.log("🔧 Building billion-scale contribution transaction...");
+    
+    // Convert to program units (6 decimals)
+    const contributionLamports = Math.floor(contributionAmount * 1_000_000);
+    const contributionBN = new BN(contributionLamports);
+    
+    console.log("💰 Contribution details:");
+    console.log("  Amount (tokens):", contributionAmount);
+    console.log("  Amount (lamports):", contributionLamports);
+    console.log("  Takeover:", takeoverAddress);
+    console.log("  Vault:", vault);
+    console.log("  Token Mint:", v1TokenMint);
+    
+    const takeoverPubkey = new PublicKey(takeoverAddress);
+    const vaultPubkey = new PublicKey(vault);  
+    const v1TokenMintPubkey = new PublicKey(v1TokenMint);
+    
+    console.log("🔑 Account addresses:");
+    console.log("  Contributor:", publicKey.toString());
+    console.log("  Takeover PDA:", takeoverPubkey.toString());
+    
+    // Create program interactions instance with proper wallet interface
+    const programInteractions = new BillionScaleProgramInteractions(connection, {
+      publicKey,
+      signTransaction: wallet.signTransaction,
+      signAllTransactions: wallet.signAllTransactions,
+    });
+    
+    // FIXED: Use your existing helper function
+    const userTokenAccount = getAssociatedTokenAddressSync(v1TokenMintPubkey, publicKey);
+    
+    console.log("  User Token Account:", userTokenAccount.toString());
+    console.log("  Vault:", vaultPubkey.toString());
+    
+    // Derive contributor PDA for logging
+    const [contributorPDA] = PublicKey.findProgramAddressSync(
+      [
+        Buffer.from("contributor"),
+        takeoverPubkey.toBuffer(),
+        publicKey.toBuffer()
+      ],
+      new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || "CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ")
+    );
+    console.log("  Contributor PDA:", contributorPDA.toString());
+    console.log("  Program ID:", process.env.NEXT_PUBLIC_PROGRAM_ID);
+    
+    // Create transaction
+    const transaction = new Transaction();
+    
+    // Check if user token account exists, create if needed
     try {
-      setContributing(true);
-      
-      console.log('🔧 Building billion-scale contribution transaction...');
-      console.log('💰 Contribution details:');
-      console.log('  Amount (tokens):', contributionAmount);
-      console.log('  Amount (lamports):', contributionLamports);
-      console.log('  Takeover:', takeoverAddress);
-      console.log('  Vault:', vault);
-      console.log('  Token Mint:', v1TokenMint);
-      
-      // Convert to program units (6 decimals) - FIXED: Use contributionLamports from validation
-      const contributionLamportsBigInt = BigInt(contributionLamports);
-      
-      // Create the contribution instruction
-      const takeoverPubkey = new PublicKey(takeoverAddress);
-      const vaultPubkey = new PublicKey(vault);
-      const tokenMintPubkey = new PublicKey(v1TokenMint);
-      
-      // Get user's associated token account
-      const userTokenAccount = getAssociatedTokenAddressSync(tokenMintPubkey, publicKey);
-      
-      // Create contributor account PDA
-      const [contributorPDA] = PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("contributor"),
-          takeoverPubkey.toBuffer(),
-          publicKey.toBuffer()
-        ],
-        PROGRAM_ID
-      );
-
-      console.log('🔑 Account addresses:');
-      console.log('  Contributor:', publicKey.toString());
-      console.log('  Takeover PDA:', takeoverPubkey.toString());
-      console.log('  User Token Account:', userTokenAccount.toString());
-      console.log('  Vault:', vaultPubkey.toString());
-      console.log('  Contributor PDA:', contributorPDA.toString());
-      console.log('  Program ID:', PROGRAM_ID.toString());
-
-      // Create the transaction
-      const transaction = new Transaction();
-      
-      // Check if ATA exists by trying to get account info
-      try {
-        await connection.getAccountInfo(userTokenAccount);
-      } catch (error) {
-        // Create ATA instruction if it doesn't exist
-        console.log('📝 Creating associated token account...');
+      const accountInfo = await connection.getAccountInfo(userTokenAccount);
+      if (!accountInfo) {
+        console.log("📝 Creating associated token account...");
+        // FIXED: Use your existing helper function
         const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
-          publicKey,
-          userTokenAccount,
-          publicKey,
-          tokenMintPubkey
+          publicKey, // payer
+          userTokenAccount, // ata
+          publicKey, // owner
+          v1TokenMintPubkey // mint
         );
         transaction.add(createATAInstruction);
       }
-
-      // Create contribute instruction data - FIXED: Use actual IDL discriminator
-      const instructionData = Buffer.alloc(9);
-      // From IDL: contribute_billion_scale discriminator is [18, 95, 63, 130, 189, 108, 16, 151]
-      const discriminator = Buffer.from([18, 95, 63, 130, 189, 108, 16, 151]);
-      const amountBuffer = Buffer.alloc(8);
-      amountBuffer.writeBigUInt64LE(contributionLamportsBigInt, 0);
-      
-      const instructionDataFull = Buffer.concat([discriminator, amountBuffer]);
-
-      // Create the contribute instruction - FIXED: Use exact program account structure
-      const contributeInstruction = new TransactionInstruction({
-        keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },          // contributor (Signer)
-          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },    // takeover (Account<Takeover>)
-          { pubkey: userTokenAccount, isSigner: false, isWritable: true },  // contributor_ata (TokenAccount)
-          { pubkey: vaultPubkey, isSigner: false, isWritable: true },       // vault (TokenAccount)
-          { pubkey: contributorPDA, isSigner: false, isWritable: true },    // contributor_account (PDA, init)
-          { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false }, // token_program
-          { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
-        ],
-        programId: PROGRAM_ID,
-        data: instructionDataFull // Use the fixed instruction data
-      });
-
-      transaction.add(contributeInstruction);
-      
-      // Get fresh blockhash and set fee payer
-      console.log('🔗 Getting fresh blockhash...');
-      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-
-      // Validate transaction before sending
-      console.log('🧪 Validating transaction...');
-      const validation = await transactionDebugger.validateTransaction(transaction);
-      
-      if (!validation.valid) {
-        const errorMsg = `Transaction validation failed: ${validation.issues.join(', ')}`;
-        console.error('❌ Validation failed:', validation.issues);
-        throw new Error(errorMsg);
-      }
-
-      // Simulate transaction first
-      console.log('🧪 Simulating transaction...');
-      const simulation = await connection.simulateTransaction(transaction);
-      if (simulation.value.err) {
-        console.error('❌ Simulation failed:', simulation.value.err);
-        console.error('Simulation logs:', simulation.value.logs);
-        throw new Error(`Transaction would fail: ${JSON.stringify(simulation.value.err)}`);
-      }
-
-      // Send transaction with retry logic
-      console.log('📡 Sending contribution transaction...');
-      let signature: string = '';
-      let retryCount = 0;
-      const maxRetries = 3;
-      
-      while (retryCount < maxRetries) {
-        try {
-          signature = await sendTransaction(transaction, connection, {
-            maxRetries: 1,
-            skipPreflight: false
-          });
-          break;
-        } catch (sendError: any) {
-          console.error(`❌ Send attempt ${retryCount + 1} failed:`, sendError);
-          
-          if (sendError.message?.includes('429') || sendError.message?.includes('rate limit')) {
-            retryCount++;
-            if (retryCount < maxRetries) {
-              console.log(`⏳ Retrying in ${retryCount} seconds...`);
-              await new Promise(resolve => setTimeout(resolve, 1000 * retryCount));
-              continue;
-            }
-          }
-          throw sendError;
-        }
-      }
-      
-      // Ensure signature was set
-      if (!signature) {
-        throw new Error('Failed to get transaction signature after retries');
-      }
-      
-      console.log('⏳ Waiting for confirmation...', signature);
-
-      // Wait for confirmation with timeout
-      const confirmationPromise = connection.confirmTransaction({
-        signature,
-        blockhash,
-        lastValidBlockHeight
-      });
-      
-      const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Transaction confirmation timeout')), 30000);
-      });
-      
-      await Promise.race([confirmationPromise, timeoutPromise]);
-      
-      console.log('✅ Transaction confirmed!');
-      
-      // Record the contribution in the database
-      try {
-        const response = await fetch('/api/contributions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            takeoverId: parseInt(takeoverAddress.slice(0, 8), 16), // Generate a numeric ID from address
-            amount: contributionLamports.toString(), // Use the lamports value (not BigInt)
-            contributor: publicKey.toString(),
-            transactionSignature: signature
-          })
-        });
-
-        if (!response.ok) {
-          console.warn('❌ Database recording failed, but blockchain transaction succeeded');
-        }
-      } catch (dbError) {
-        console.warn('❌ Database error:', dbError);
-        // Don't fail the whole operation for database issues
-      }
-
-      toast({
-        title: "Success! 🎉",
-        description: `Contributed ${contributionAmount.toLocaleString()} tokens successfully`,
-      });
-      
-      // Reset form
-      setAmount('');
-      setEstimatedRewards(null);
-      
-      // Refresh the page data
-      setTimeout(() => {
-        window.location.reload();
-      }, 2000);
-      
-    } catch (error: any) {
-      console.error("❌ Contribution error:", error);
-      
-      // Analyze error with debugger
-      const analysis = await transactionDebugger.analyzeError(error);
-      setDebugInfo(analysis);
-      setShowDebug(true);
-      
-      let errorMessage = analysis.suggestion || "Unknown error occurred";
-      
-      // Provide specific error messages for common issues
-      if (error.message?.includes('User rejected')) {
-        errorMessage = "Transaction was cancelled by user";
-      }
-      
-      toast({
-        title: "Contribution Failed",
-        description: errorMessage,
-        variant: "destructive"
-      });
-    } finally {
-      setContributing(false);
+    } catch (error) {
+      // FIXED: Proper error typing
+      console.log("⚠️ Could not check ATA, will attempt to create:", (error as Error).message);
+      // FIXED: Use your existing helper function
+      const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
+        publicKey,
+        userTokenAccount,
+        publicKey,
+        v1TokenMintPubkey
+      );
+      transaction.add(createATAInstruction);
     }
-  };
+    
+    // Use the Anchor method for contribute_billion_scale
+    console.log("🎯 Creating contribute_billion_scale instruction with Anchor...");
+    const contributeInstruction = await programInteractions.contributeBillionScale(
+      publicKey,        // contributor
+      takeoverPubkey,   // takeover  
+      userTokenAccount, // contributorAta
+      vaultPubkey,      // vault
+      contributionBN    // amount as BN
+    );
+    
+    transaction.add(contributeInstruction);
+    
+    // Get fresh blockhash and set fee payer
+    console.log("🔗 Getting fresh blockhash...");
+    const { blockhash } = await connection.getLatestBlockhash();
+    transaction.recentBlockhash = blockhash;
+    transaction.feePayer = publicKey;
+    
+    // Validate transaction before sending
+    console.log("🧪 Validating transaction...");
+    const simulation = await connection.simulateTransaction(transaction);
+    
+    if (simulation.value.err) {
+      const errorMsg = `Transaction validation failed: ${JSON.stringify(simulation.value.err)}`;
+      console.log("❌ Validation failed:", simulation.value.err);
+      throw new Error(errorMsg);
+    }
+    
+    console.log("✅ Validation successful!");
+    if (simulation.value.logs) {
+      console.log("📋 Simulation logs:", simulation.value.logs);
+    }
+    
+    // Send and confirm transaction
+    console.log("🔄 Sending contribution transaction...");
+    const signature = await sendTransaction(transaction, connection);
+    
+    console.log("⏳ Waiting for confirmation...", signature);
+    const confirmation = await connection.confirmTransaction(signature, 'confirmed');
+    
+    if (confirmation.value.err) {
+      throw new Error(`Transaction failed: ${confirmation.value.err}`);
+    }
+    
+    console.log("✅ Transaction confirmed, recording contribution...");
+    
+    // Record the contribution in the database
+    try {
+      const response = await fetch('/api/contributions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          takeoverId: parseInt(takeoverAddress.slice(0, 8), 16),
+          amount: contributionLamports.toString(),
+          contributor: publicKey.toString(),
+          transactionSignature: signature
+        })
+      });
+
+      if (!response.ok) {
+        console.warn('Failed to record contribution in database, but blockchain transaction succeeded');
+      }
+    } catch (dbError) {
+      console.warn('Database recording failed:', dbError);
+    }
+
+    toast({
+      title: "Success! 🎉",
+      description: `Contributed ${contributionAmount.toLocaleString()} tokens successfully with billion-scale protection`,
+    });
+    
+    // Reset form
+    setAmount('');
+    setEstimatedRewards(null);
+    
+    // Refresh the page data
+    setTimeout(() => {
+      window.location.reload();
+    }, 2000);
+    
+  } catch (error) {
+    // FIXED: Proper error handling
+    console.error("❌ Contribution error:", error);
+    console.log("🔍 Analyzing transaction error:", error);
+    
+    // Enhanced error handling for billion-scale specific errors
+    let errorMessage = "Failed to contribute. Please try again.";
+    const errorStr = (error as Error).message || String(error);
+    
+    if (errorStr.includes("InsufficientFunds") || errorStr.includes("Custom\":101")) {
+      errorMessage = "Insufficient token balance. Please check your token balance and try again.";
+    } else if (errorStr.includes("WouldCauseOverflow")) {
+      errorMessage = "This contribution would exceed safe limits. Try a smaller amount.";
+    } else if (errorStr.includes("TakeoverExpired")) {
+      errorMessage = "This takeover has expired and no longer accepts contributions.";
+    } else if (errorStr.includes("AlreadyFinalized")) {
+      errorMessage = "This takeover has already been finalized.";
+    } else if (errorStr.includes("InvalidAmount")) {
+      errorMessage = "Invalid contribution amount. Please check the amount and try again.";
+    }
+    
+    toast({
+      title: "Contribution Failed",
+      description: errorMessage,
+      variant: "destructive"
+    });
+  } finally {
+    setContributing(false);
+  }
+};
 
   const formatAmount = (amount: number) => {
     return amount.toLocaleString(undefined, { maximumFractionDigits: 2 });
