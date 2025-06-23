@@ -50,6 +50,7 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
 
   const [amount, setAmount] = useState("");
   const [contributing, setContributing] = useState(false);
+  const [debugMode, setDebugMode] = useState(false);
 
   // Calculate progress and goals
   const totalContributedRaw = parseInt(totalContributed) || 0;
@@ -67,7 +68,7 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
     return tokens.toFixed(1);
   };
 
-  // MAIN CONTRIBUTION HANDLER - Uses real Solana transactions
+  // MAIN CONTRIBUTION HANDLER - Fixed for proper transaction structure
   const handleContribute = async () => {
     if (!connected || !publicKey || !sendTransaction) {
       toast({
@@ -99,13 +100,23 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
         takeover_address: takeoverAddress
       });
 
-      // Get required PublicKeys
+      // FIXED: Verify environment variables
+      if (!process.env.NEXT_PUBLIC_PROGRAM_ID) {
+        throw new Error('NEXT_PUBLIC_PROGRAM_ID environment variable not set');
+      }
+
+      // Get required PublicKeys with validation
       const takeoverPubkey = new PublicKey(takeoverAddress);
       const v1TokenMintPubkey = new PublicKey(v1TokenMint);
       const vaultPubkey = new PublicKey(vault);
-      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || 'CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ');
+      const programId = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID);
 
-      // Get user's associated token account using your existing pattern
+      console.log('🔍 Using Program ID:', programId.toString());
+      console.log('🔍 Takeover Address:', takeoverPubkey.toString());
+      console.log('🔍 V1 Token Mint:', v1TokenMintPubkey.toString());
+      console.log('🔍 Vault:', vaultPubkey.toString());
+
+      // Get user's associated token account
       const userTokenAccount = await Token.getAssociatedTokenAddress(
         ASSOCIATED_TOKEN_PROGRAM_ID,
         TOKEN_PROGRAM_ID,
@@ -113,8 +124,8 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
         publicKey
       );
 
-      // Get contributor PDA
-      const [contributorPDA] = PublicKey.findProgramAddressSync(
+      // FIXED: Get contributor PDA with proper seeds
+      const [contributorPDA, contributorBump] = PublicKey.findProgramAddressSync(
         [
           Buffer.from("contributor"),
           takeoverPubkey.toBuffer(),
@@ -126,48 +137,79 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
       console.log('📋 Account addresses:', {
         userTokenAccount: userTokenAccount.toString(),
         contributorPDA: contributorPDA.toString(),
-        programId: programId.toString()
+        contributorBump: contributorBump,
+        contributor: publicKey.toString()
       });
+
+      // FIXED: Check user token balance first
+      try {
+        const balance = await connection.getTokenAccountBalance(userTokenAccount);
+        const userBalance = balance.value.uiAmount || 0;
+        console.log('💰 User token balance:', userBalance);
+        
+        if (userBalance < contributionAmount) {
+          throw new Error(`Insufficient balance. You have ${userBalance} tokens but need ${contributionAmount}`);
+        }
+      } catch (balanceError) {
+        console.warn('⚠️ Could not check balance:', balanceError);
+        // Continue anyway - let the transaction fail if insufficient
+      }
 
       // Create the transaction
       const transaction = new Transaction();
 
-      // Check if user's ATA exists, create if needed
+      // FIXED: Check if user's ATA exists more carefully
+      let ataExists = false;
       try {
         const accountInfo = await connection.getAccountInfo(userTokenAccount);
-        if (!accountInfo) {
-          console.log('🔧 Creating ATA for user...');
-          // Use your existing ATA creation pattern
-          const createATAInstruction = new TransactionInstruction({
-            keys: [
-              { pubkey: publicKey, isSigner: true, isWritable: true },
-              { pubkey: userTokenAccount, isSigner: false, isWritable: true },
-              { pubkey: publicKey, isSigner: false, isWritable: false },
-              { pubkey: v1TokenMintPubkey, isSigner: false, isWritable: false },
-              { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-              { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-              { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false },
-            ],
-            programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-            data: Buffer.from([])
-          });
-          transaction.add(createATAInstruction);
-        }
+        ataExists = accountInfo !== null;
+        console.log('🔍 ATA exists:', ataExists);
       } catch (error) {
-        console.log('🔧 ATA check failed, will create anyway...');
+        console.log('🔧 ATA check failed, assuming it needs to be created');
+        ataExists = false;
       }
 
-      // Create the contribute_billion_scale instruction
-      const instructionData = Buffer.alloc(9);
-      instructionData.writeUInt8(14, 0); // contribute_billion_scale discriminator
-      instructionData.writeBigUInt64LE(BigInt(contributionLamports), 1);
+      if (!ataExists) {
+        console.log('🔧 Creating ATA for user...');
+        const createATAInstruction = new TransactionInstruction({
+          keys: [
+            { pubkey: publicKey, isSigner: true, isWritable: true },                    // payer
+            { pubkey: userTokenAccount, isSigner: false, isWritable: true },           // associated_token_account
+            { pubkey: publicKey, isSigner: false, isWritable: false },                 // owner
+            { pubkey: v1TokenMintPubkey, isSigner: false, isWritable: false },         // mint
+            { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },   // system_program
+            { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },          // token_program
+            { pubkey: new PublicKey("SysvarRent111111111111111111111111111111111"), isSigner: false, isWritable: false }, // rent
+          ],
+          programId: ASSOCIATED_TOKEN_PROGRAM_ID,
+          data: Buffer.from([]) // No data needed for ATA creation
+        });
+        transaction.add(createATAInstruction);
+      }
 
+      // FIXED: Use correct discriminator from IDL
+      // From your IDL: contribute_billion_scale has discriminator [14, 89, 55, 236, 195, 138, 27, 103]
+      const instructionData = Buffer.alloc(16); // 8 bytes discriminator + 8 bytes amount
+      const discriminator = [14, 89, 55, 236, 195, 138, 27, 103];
+      discriminator.forEach((byte, index) => {
+        instructionData.writeUInt8(byte, index);
+      });
+      // Write the amount as u64 little endian at offset 8
+      instructionData.writeBigUInt64LE(BigInt(contributionLamports), 8);
+
+      console.log('📋 Instruction data:', {
+        discriminator: Array.from(discriminator),
+        amount: contributionLamports,
+        instructionDataHex: instructionData.toString('hex')
+      });
+
+      // FIXED: Account ordering must match exactly what the program expects
       const contributeInstruction = new TransactionInstruction({
         keys: [
-          { pubkey: publicKey, isSigner: true, isWritable: true },        // contributor
-          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },          // takeover
+          { pubkey: publicKey, isSigner: true, isWritable: true },                 // contributor
+          { pubkey: takeoverPubkey, isSigner: false, isWritable: true },           // takeover
           { pubkey: userTokenAccount, isSigner: false, isWritable: true },         // contributor_ata
-          { pubkey: vaultPubkey, isSigner: false, isWritable: true },                    // vault
+          { pubkey: vaultPubkey, isSigner: false, isWritable: true },              // vault
           { pubkey: contributorPDA, isSigner: false, isWritable: true },           // contributor_account
           { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },        // token_program
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false }, // system_program
@@ -183,13 +225,39 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
       transaction.recentBlockhash = blockhash;
       transaction.feePayer = publicKey;
 
+      console.log('📝 Transaction summary:', {
+        instructions: transaction.instructions.length,
+        accounts: contributeInstruction.keys.map(k => ({
+          pubkey: k.pubkey.toString(),
+          signer: k.isSigner,
+          writable: k.isWritable
+        })),
+        programId: programId.toString()
+      });
+
       console.log('📝 Sending transaction for signature...');
 
-      // Send transaction for user signature and submit to blockchain
-      const signature = await sendTransaction(transaction, connection, {
-        skipPreflight: false,
-        preflightCommitment: 'processed'
-      });
+      // FIXED: Add better error handling for sendTransaction
+      let signature: string;
+      try {
+        signature = await sendTransaction(transaction, connection, {
+          skipPreflight: debugMode, // Skip preflight in debug mode
+          preflightCommitment: 'processed',
+          maxRetries: 3
+        });
+      } catch (sendError: any) {
+        console.error('❌ Send transaction error:', sendError);
+        
+        // Extract more details from wallet error
+        if (sendError.message) {
+          console.error('Error message:', sendError.message);
+        }
+        if (sendError.logs) {
+          console.error('Transaction logs:', sendError.logs);
+        }
+        
+        throw new Error(`Transaction failed to send: ${sendError.message || sendError}`);
+      }
 
       console.log('✅ Transaction submitted:', signature);
 
@@ -203,12 +271,13 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
       const confirmation = await connection.confirmTransaction(signature, 'processed');
       
       if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${confirmation.value.err}`);
+        console.error('❌ Transaction confirmation error:', confirmation.value.err);
+        throw new Error(`Transaction failed: ${JSON.stringify(confirmation.value.err)}`);
       }
 
       console.log('✅ Blockchain contribution successful:', signature);
       
-      // Record the contribution in the database (keep your existing database code)
+      // Record the contribution in the database
       try {
         const response = await fetch('/api/contributions', {
           method: 'POST',
@@ -225,7 +294,7 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
           const errorText = await response.text();
           console.warn('❌ Database recording failed:', errorText);
           
-          // Try to sync the database (keep your existing sync code)
+          // Try to sync the database
           try {
             const newTotalContributed = totalContributedRaw + contributionLamports;
             await fetch('/api/sync-takeover', {
@@ -269,8 +338,8 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
       if (error.message) {
         if (error.message.includes('User rejected') || error.message.includes('User denied')) {
           errorMessage = "Transaction was cancelled by user";
-        } else if (error.message.includes('insufficient funds')) {
-          errorMessage = "Insufficient token balance or SOL for gas";
+        } else if (error.message.includes('insufficient') || error.message.includes('Insufficient')) {
+          errorMessage = error.message; // Use the specific insufficient balance message
         } else if (error.message.includes('blockhash not found')) {
           errorMessage = "Network congestion, please try again";
         } else {
@@ -304,6 +373,19 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {/* Debug Toggle */}
+        {process.env.NODE_ENV === 'development' && (
+          <div className="flex items-center space-x-2">
+            <input
+              type="checkbox"
+              id="debug"
+              checked={debugMode}
+              onChange={(e) => setDebugMode(e.target.checked)}
+            />
+            <label htmlFor="debug" className="text-sm">Debug Mode (Skip Preflight)</label>
+          </div>
+        )}
+
         {/* Progress Bar */}
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
