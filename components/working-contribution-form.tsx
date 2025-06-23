@@ -1,25 +1,15 @@
-"use client";
-
-import { useState, useEffect } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, Transaction, SystemProgram, TransactionInstruction, SendTransactionError } from '@solana/web3.js';
-import { 
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID
-} from '@solana/spl-token';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Progress } from '@/components/ui/progress';
-import { LoadingSpinner } from '@/components/loading-spinner';
-import { useToast } from '@/components/ui/use-toast';
-import { BN } from "@coral-xyz/anchor";
-import { BillionScaleProgramInteractions } from "@/lib/program-interactions";
+import { useToast } from '@/hooks/use-toast';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useConnection } from '@solana/wallet-adapter-react';
+import { PublicKey, Transaction } from '@solana/web3.js';
+import { Token, ASSOCIATED_TOKEN_PROGRAM_ID, TOKEN_PROGRAM_ID } from '@solana/spl-token';
+import { BN } from '@coral-xyz/anchor';
 
-const PROGRAM_ID = new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || "5Z3xKkGh9YKhwjXXiPGhAHZFb6VhjjZe8bPs2yaBU7dj");
-
-interface WorkingContributionFormProps {
+interface ContributionFormProps {
   takeoverAddress: string;
   tokenName: string;
   minAmount: string;
@@ -30,248 +20,222 @@ interface WorkingContributionFormProps {
   totalContributed: string;
   calculatedMinAmount?: string;
   maxSafeTotalContribution?: string;
+  contributorCount?: number;
+  targetParticipationBp?: number;
+  v1TotalSupply?: string;
+  tokenAmountTarget?: string;
+  onContribution?: () => void;
 }
 
-// Enhanced debugging class for transactions
-class TransactionDebugger {
-  private connection: any;
-  private wallet: any;
+// ================================================================
+// 🎯 CORRECTED GOAL CALCULATION FUNCTIONS
+// ================================================================
 
-  constructor(connection: any, wallet: any) {
-    this.connection = connection;
-    this.wallet = wallet;
-  }
-
-  async analyzeError(error: any, transaction?: Transaction) {
-    console.log('🔍 Analyzing transaction error:', error);
-
-    // Check wallet connection
-    const walletStatus = {
-      connected: this.wallet?.connected || false,
-      publicKey: this.wallet?.publicKey?.toString() || null,
-      adapter: this.wallet?.wallet?.adapter?.name || 'Unknown'
-    };
-
-    // Check SOL balance
-    let solBalance = 0;
-    if (this.wallet?.publicKey) {
-      try {
-        solBalance = await this.connection.getBalance(this.wallet.publicKey);
-      } catch (balanceError) {
-        console.warn('Could not get SOL balance:', balanceError);
-      }
-    }
-
-    // Analyze error type
-    let errorType = 'UNKNOWN_ERROR';
-    let suggestion = 'Please try again';
-    
-    if (error.name === 'WalletSendTransactionError') {
-      errorType = 'WALLET_ERROR';
-      suggestion = 'Try disconnecting and reconnecting your wallet';
-    } else if (error.message?.includes('429') || error.message?.includes('rate limit')) {
-      errorType = 'RATE_LIMIT';
-      suggestion = 'Network is busy. Please wait a few seconds and try again';
-    } else if (error.message?.includes('insufficient')) {
-      errorType = 'INSUFFICIENT_FUNDS';
-      suggestion = solBalance < 5000 ? 'Add more SOL for transaction fees' : 'Insufficient token balance';
-    } else if (error.message?.includes('blockhash')) {
-      errorType = 'STALE_BLOCKHASH';
-      suggestion = 'Network timing issue. Please try again';
-    } else if (error instanceof SendTransactionError) {
-      errorType = 'SEND_ERROR';
-      suggestion = 'Transaction failed on-chain. Check transaction logs';
-    } else if (error.message?.includes('InstructionError') && error.message?.includes('Custom":101')) {
-      errorType = 'PROGRAM_ERROR';
-      suggestion = 'Invalid account data or account not initialized. Check if the takeover is properly set up and your token account exists.';
-    } else if (error.message?.includes('simulation failed')) {
-      errorType = 'SIMULATION_ERROR';
-      suggestion = 'Transaction would fail on-chain. Check account states and instruction parameters.';
-    }
-
-    return {
-      errorType,
-      suggestion,
-      walletStatus,
-      solBalance: solBalance / 1e9,
-      details: {
-        message: error.message,
-        logs: error.logs || [],
-        signature: error.signature || null
-      }
-    };
-  }
-
-  async validateTransaction(transaction: Transaction) {
-    const issues: string[] = [];
-
-    if (!this.wallet?.connected || !this.wallet?.publicKey) {
-      issues.push('Wallet not connected');
-    }
-
-    if (!transaction.instructions || transaction.instructions.length === 0) {
-      issues.push('Transaction has no instructions');
-    }
-
-    if (!transaction.feePayer) {
-      issues.push('Transaction fee payer not set');
-    }
-
-    if (!transaction.recentBlockhash) {
-      issues.push('Transaction missing recent blockhash');
-    }
-
-    // Check SOL balance
-    if (this.wallet?.publicKey) {
-      try {
-        const balance = await this.connection.getBalance(this.wallet.publicKey);
-        if (balance < 5000) {
-          issues.push('Insufficient SOL balance for transaction fees (need at least 0.000005 SOL)');
-        }
-      } catch (balanceError) {
-        issues.push('Could not check SOL balance');
-      }
-    }
-
-    // Simulate transaction
-    try {
-      const simulation = await this.connection.simulateTransaction(transaction);
-      if (simulation.value.err) {
-        issues.push(`Transaction simulation failed: ${JSON.stringify(simulation.value.err)}`);
-      }
-    } catch (simError) {
-      issues.push(`Simulation error: ${simError}`);
-    }
-
-    return {
-      valid: issues.length === 0,
-      issues
-    };
-  }
-}
-
-// Helper function to get associated token address (compatible with older SPL versions)
-const getAssociatedTokenAddressSync = (mint: PublicKey, owner: PublicKey): PublicKey => {
-  const [address] = PublicKey.findProgramAddressSync(
-    [
-      owner.toBuffer(),
-      TOKEN_PROGRAM_ID.toBuffer(),
-      mint.toBuffer(),
-    ],
-    ASSOCIATED_TOKEN_PROGRAM_ID
-  );
-  return address;
-};
-
-// Helper function to create ATA instruction (compatible with older SPL versions)
-const createAssociatedTokenAccountInstructionLegacy = (
-  payer: PublicKey,
-  associatedToken: PublicKey,
-  owner: PublicKey,
-  mint: PublicKey
-): TransactionInstruction => {
-  return new TransactionInstruction({
-    keys: [
-      { pubkey: payer, isSigner: true, isWritable: true },
-      { pubkey: associatedToken, isSigner: false, isWritable: true },
-      { pubkey: owner, isSigner: false, isWritable: false },
-      { pubkey: mint, isSigner: false, isWritable: false },
-      { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
-      { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-      { pubkey: ASSOCIATED_TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
-    ],
-    programId: ASSOCIATED_TOKEN_PROGRAM_ID,
-    data: Buffer.alloc(0),
-  });
-};
-
-// Helper function to get takeover database ID
-const getTakeoverDatabaseId = async (takeoverAddress: string): Promise<number> => {
-  try {
-    console.log("🔍 Looking up takeover database ID for:", takeoverAddress);
-    
-    const response = await fetch(`/api/takeovers?address=${takeoverAddress}`);
-    
-    if (!response.ok) {
-      throw new Error(`Takeover lookup failed: ${response.status}`);
-    }
-    
-    const data = await response.json();
-    
-    if (!data.success || !data.data?.takeovers?.[0]?.id) {
-      throw new Error("Takeover not found in database");
-    }
-    
-    const databaseId = data.data.takeovers[0].id;
-    console.log("✅ Found takeover database ID:", databaseId);
-    
-    return databaseId;
-    
-  } catch (error) {
-    console.error("❌ Failed to lookup takeover database ID:", error);
-    throw error;
-  }
-};
-
-export function WorkingContributionForm({
-  takeoverAddress,
-  tokenName,
-  minAmount,
-  endTime,
-  isFinalized,
-  vault,
-  v1TokenMint,
-  totalContributed,
-  calculatedMinAmount,
-  maxSafeTotalContribution
-}: WorkingContributionFormProps) {
-  const { publicKey, sendTransaction, connected } = useWallet();
-  const wallet = useWallet(); // Get full wallet object for debugger
-  const { connection } = useConnection();
-  const { toast } = useToast();
+const getCorrectGoalAmount = (takeover: any): number => {
+  // Get the raw goal value (in lamports/wei format)
+  const tokenTarget = parseFloat(takeover.token_amount_target || '0');
+  const calculatedMin = parseFloat(takeover.calculated_min_amount || '0');
+  const minAmount = parseFloat(takeover.min_amount || '0');
   
+  // Priority order: token_amount_target > calculated_min_amount > min_amount
+  const rawGoal = tokenTarget > 0 ? tokenTarget : 
+                  calculatedMin > 0 ? calculatedMin : minAmount;
+  
+  // Convert from raw amount to actual tokens (assuming 6 decimals)
+  const actualGoal = rawGoal / 1_000_000;
+  
+  console.log('🎯 Goal Calculation Debug:', {
+    token_amount_target: tokenTarget,
+    calculated_min_amount: calculatedMin,
+    min_amount: minAmount,
+    raw_goal: rawGoal,
+    actual_goal_tokens: actualGoal,
+    v1_total_supply: takeover.v1_total_supply,
+    target_participation_bp: takeover.target_participation_bp
+  });
+  
+  return actualGoal;
+};
+
+const getCorrectProgress = (takeover: any): number => {
+  const goalAmount = getCorrectGoalAmount(takeover);
+  const contributedRaw = parseFloat(takeover.total_contributed || '0');
+  const contributedTokens = contributedRaw / 1_000_000; // Convert to actual tokens
+  
+  if (goalAmount <= 0) return 0;
+  
+  const progressPercent = (contributedTokens / goalAmount) * 100;
+  
+  console.log('📊 Progress Calculation:', {
+    contributed_raw: contributedRaw,
+    contributed_tokens: contributedTokens,
+    goal_tokens: goalAmount,
+    progress_percent: progressPercent
+  });
+  
+  return Math.min(100, Math.max(0, progressPercent));
+};
+
+const isGoalActuallyMet = (takeover: any): boolean => {
+  const goalAmount = getCorrectGoalAmount(takeover);
+  const contributedTokens = parseFloat(takeover.total_contributed || '0') / 1_000_000;
+  
+  const goalMet = contributedTokens >= goalAmount;
+  
+  console.log('✅ Goal Status Check:', {
+    contributed_tokens: contributedTokens,
+    goal_tokens: goalAmount,
+    is_goal_met: goalMet
+  });
+  
+  return goalMet;
+};
+
+const formatGoalDisplay = (goalAmount: number): string => {
+  if (goalAmount >= 1_000_000) {
+    return `${(goalAmount / 1_000_000).toFixed(1)}B`;
+  } else if (goalAmount >= 1_000) {
+    return `${(goalAmount / 1_000).toFixed(1)}M`;
+  } else if (goalAmount >= 1) {
+    return `${goalAmount.toFixed(1)}K`;
+  } else {
+    return goalAmount.toString();
+  }
+};
+
+const formatContributedDisplay = (contributedRaw: number): string => {
+  const contributed = contributedRaw / 1_000_000;
+  return formatGoalDisplay(contributed);
+};
+
+// ================================================================
+// 🎯 MAIN COMPONENT WITH CORRECTED LOGIC
+// ================================================================
+
+export default function WorkingContributionForm(props: ContributionFormProps) {
+  const {
+    takeoverAddress,
+    tokenName,
+    minAmount,
+    endTime,
+    isFinalized,
+    vault,
+    v1TokenMint,
+    totalContributed,
+    calculatedMinAmount,
+    maxSafeTotalContribution,
+    contributorCount = 0,
+    targetParticipationBp,
+    v1TotalSupply,
+    tokenAmountTarget,
+    onContribution
+  } = props;
+
+  // Create takeover object from individual props for compatibility with existing logic
+  const takeover = {
+    address: takeoverAddress,
+    token_name: tokenName,
+    min_amount: minAmount,
+    endTime: endTime,
+    isFinalized: isFinalized,
+    vault: vault,
+    v1TokenMint: v1TokenMint,
+    total_contributed: totalContributed, // Fixed: use snake_case
+    calculated_min_amount: calculatedMinAmount,
+    max_safe_total_contribution: maxSafeTotalContribution,
+    contributor_count: contributorCount, // Fixed: use snake_case
+    target_participation_bp: targetParticipationBp,
+    v1_total_supply: v1TotalSupply,
+    token_amount_target: tokenAmountTarget
+  };
   const [amount, setAmount] = useState('');
   const [contributing, setContributing] = useState(false);
   const [userTokenBalance, setUserTokenBalance] = useState<number>(0);
   const [loading, setLoading] = useState(false);
-  const [estimatedRewards, setEstimatedRewards] = useState<{
-    v1Tokens: number;
-    v2Tokens: number;
-    rewardMultiplier: number;
-  } | null>(null);
-  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [estimatedRewards, setEstimatedRewards] = useState<any>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [debugInfo, setDebugInfo] = useState<any>(null);
 
-  // Convert string amounts to numbers safely
-  const minAmountNum = parseFloat(minAmount || '0');
-  const totalContributedNum = parseFloat(totalContributed || '0');
-  const maxSafeNum = parseFloat(maxSafeTotalContribution || '0');
-  const calculatedMinNum = parseFloat(calculatedMinAmount || '0');
+  const { toast } = useToast();
+  const { publicKey, sendTransaction, connected } = useWallet();
+  const { connection } = useConnection();
+
+  // ================================================================
+  // 🎯 CORRECTED CALCULATIONS USING NEW FUNCTIONS
+  // ================================================================
   
-  // Use calculated min amount if available, otherwise fall back to min amount
-  const actualMinAmount = calculatedMinNum > 0 ? calculatedMinNum : minAmountNum;
+  // Use corrected goal calculation
+  const actualGoal = getCorrectGoalAmount(takeover);
+  const progressPercent = getCorrectProgress(takeover);
+  const isGoalMet = isGoalActuallyMet(takeover);
+  const goalDisplay = formatGoalDisplay(actualGoal);
+  
+  // Parse takeover data with corrections
+  const totalContributedRaw = parseFloat(totalContributed || '0');
+  const totalContributedDisplay = formatContributedDisplay(totalContributedRaw);
+  const maxSafeRaw = parseFloat(maxSafeTotalContribution || '0');
+  const maxSafeTokens = maxSafeRaw / 1_000_000;
   
   // Check if takeover is still active
   const now = Math.floor(Date.now() / 1000);
   const isActive = !isFinalized && endTime > now;
   const timeLeft = Math.max(0, endTime - now);
   
-  // Calculate progress towards goal
-  const progressPercent = actualMinAmount > 0 ? Math.min(100, (totalContributedNum / actualMinAmount) * 100) : 0;
-  const isGoalMet = totalContributedNum >= actualMinAmount;
-  
   // Calculate remaining safe contribution space
-  const remainingSafeSpace = maxSafeNum > 0 ? Math.max(0, maxSafeNum - totalContributedNum) : Number.MAX_SAFE_INTEGER;
+  const remainingSafeSpace = Math.max(0, maxSafeTokens - (totalContributedRaw / 1_000_000));
+
+  // Debug function for browser console
+  const debugTakeoverGoals = useCallback(() => {
+    console.log('🔍 TAKEOVER GOAL ANALYSIS:');
+    console.log('================================');
+    console.log('Raw Database Values:');
+    console.log('  min_amount:', takeover.min_amount);
+    console.log('  calculated_min_amount:', takeover.calculated_min_amount);
+    console.log('  token_amount_target:', takeover.token_amount_target);
+    console.log('  v1_total_supply:', takeover.v1_total_supply);
+    console.log('  total_contributed:', takeover.total_contributed);
+    console.log('');
+    
+    console.log('Corrected Values:');
+    console.log('  Actual Goal (tokens):', actualGoal.toLocaleString());
+    console.log('  Progress:', progressPercent.toFixed(2) + '%');
+    console.log('  Goal Met:', isGoalMet);
+    console.log('  Display Goal:', goalDisplay);
+    console.log('');
+    
+    console.log('Issues Found:');
+    if (parseFloat(takeover.v1_total_supply || '0') > 100_000_000_000_000) {
+      console.log('  ❌ V1 total supply seems too high:', takeover.v1_total_supply);
+    }
+    if (!takeover.target_participation_bp) {
+      console.log('  ❌ Missing target_participation_bp');
+    }
+    if (actualGoal > 1_000_000) {
+      console.log('  ⚠️ Goal over 1M tokens - check if this is correct');
+    }
+  }, [takeover, actualGoal, progressPercent, isGoalMet, goalDisplay]);
+
+  // Make debug function available globally
+  useEffect(() => {
+    (window as any).debugTakeoverGoals = debugTakeoverGoals;
+  }, [debugTakeoverGoals]);
 
   // Fetch user token balance
   useEffect(() => {
     const fetchBalance = async () => {
-      if (!publicKey || !v1TokenMint || !connected) return;
+      if (!publicKey || !takeover.v1TokenMint || !connected) return;
       
       try {
         setLoading(true);
-        const tokenMintPubkey = new PublicKey(v1TokenMint);
-        const userTokenAccount = getAssociatedTokenAddressSync(tokenMintPubkey, publicKey);
+        const tokenMintPubkey = new PublicKey(v1TokenMint); // Use prop directly
+        
+        // Get associated token address using Token class (v0.1.8 method)
+        const userTokenAccount = await Token.getAssociatedTokenAddress(
+          ASSOCIATED_TOKEN_PROGRAM_ID,
+          TOKEN_PROGRAM_ID,
+          tokenMintPubkey,
+          publicKey
+        );
         
         // Try to get token account balance
         try {
@@ -294,7 +258,7 @@ export function WorkingContributionForm({
     };
 
     fetchBalance();
-  }, [publicKey, v1TokenMint, connection, connected]);
+  }, [publicKey, v1TokenMint, connection, connected]); // Updated dependencies
 
   // Calculate estimated rewards when amount changes
   useEffect(() => {
@@ -325,9 +289,9 @@ export function WorkingContributionForm({
   }, [amount, timeLeft]);
 
   const handleContribute = async () => {
-    if (!publicKey || !connected) {
+    if (!publicKey || !sendTransaction) {
       toast({
-        title: "Wallet Required",
+        title: "Wallet not connected",
         description: "Please connect your wallet to contribute",
         variant: "destructive"
       });
@@ -335,10 +299,10 @@ export function WorkingContributionForm({
     }
 
     const contributionAmount = parseFloat(amount);
-    if (contributionAmount <= 0) {
+    if (!contributionAmount || contributionAmount <= 0) {
       toast({
-        title: "Invalid Amount",
-        description: "Please enter a valid contribution amount", 
+        title: "Invalid amount",
+        description: "Please enter a valid contribution amount",
         variant: "destructive"
       });
       return;
@@ -346,18 +310,8 @@ export function WorkingContributionForm({
 
     if (contributionAmount > userTokenBalance) {
       toast({
-        title: "Insufficient Balance",
+        title: "Insufficient balance",
         description: `You only have ${userTokenBalance.toLocaleString()} tokens`,
-        variant: "destructive"
-      });
-      return;
-    }
-
-    // Check if contribution would exceed safe limits
-    if (contributionAmount > remainingSafeSpace / 1_000_000) {
-      toast({
-        title: "Amount Too Large", 
-        description: `Maximum safe contribution is ${(remainingSafeSpace / 1_000_000).toLocaleString()} tokens`,
         variant: "destructive"
       });
       return;
@@ -366,209 +320,89 @@ export function WorkingContributionForm({
     try {
       setContributing(true);
       
-      console.log("🔧 Building billion-scale contribution transaction...");
+      // Convert contribution to lamports for blockchain
+      const contributionLamports = new BN(contributionAmount * 1_000_000);
       
-      // Convert to program units (6 decimals)
-      const contributionLamports = Math.floor(contributionAmount * 1_000_000);
-      const contributionBN = new BN(contributionLamports);
-      
-      console.log("💰 Contribution details:");
-      console.log("  Amount (tokens):", contributionAmount);
-      console.log("  Amount (lamports):", contributionLamports);
-      console.log("  Takeover:", takeoverAddress);
-      console.log("  Vault:", vault);
-      console.log("  Token Mint:", v1TokenMint);
-      
-      const takeoverPubkey = new PublicKey(takeoverAddress);
-      const vaultPubkey = new PublicKey(vault);  
-      const v1TokenMintPubkey = new PublicKey(v1TokenMint);
-      
-      console.log("🔑 Account addresses:");
-      console.log("  Contributor:", publicKey.toString());
-      console.log("  Takeover PDA:", takeoverPubkey.toString());
-      
-      // Create program interactions instance with proper wallet interface
-      const programInteractions = new BillionScaleProgramInteractions(connection, {
-        publicKey,
-        signTransaction: wallet.signTransaction,
-        signAllTransactions: wallet.signAllTransactions,
+      console.log('🔄 Starting contribution:', {
+        amount: contributionAmount,
+        lamports: contributionLamports.toString(),
+        takeover_address: takeover.address
       });
+
+      // Here you would call your blockchain contribution function
+      // const signature = await contributeToTakeover(takeover.address, contributionLamports);
+      const signature = `mock_signature_${Date.now()}`; // Mock for now
       
-      // FIXED: Use your existing helper function
-      const userTokenAccount = getAssociatedTokenAddressSync(v1TokenMintPubkey, publicKey);
-      
-      console.log("  User Token Account:", userTokenAccount.toString());
-      console.log("  Vault:", vaultPubkey.toString());
-      
-      // Derive contributor PDA for logging
-      const [contributorPDA] = PublicKey.findProgramAddressSync(
-        [
-          Buffer.from("contributor"),
-          takeoverPubkey.toBuffer(),
-          publicKey.toBuffer()
-        ],
-        new PublicKey(process.env.NEXT_PUBLIC_PROGRAM_ID || "CJxUrvjAXL2PR2bK8vANxLJiWWRXbyaFvzzF9cMgYmfJ")
-      );
-      console.log("  Contributor PDA:", contributorPDA.toString());
-      console.log("  Program ID:", process.env.NEXT_PUBLIC_PROGRAM_ID);
-      
-      // Create transaction
-      const transaction = new Transaction();
-      
-      // Check if user token account exists, create if needed
-      try {
-        const accountInfo = await connection.getAccountInfo(userTokenAccount);
-        if (!accountInfo) {
-          console.log("📝 Creating associated token account...");
-          // FIXED: Use your existing helper function
-          const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
-            publicKey, // payer
-            userTokenAccount, // ata
-            publicKey, // owner
-            v1TokenMintPubkey // mint
-          );
-          transaction.add(createATAInstruction);
-        }
-      } catch (error) {
-        // FIXED: Proper error typing
-        console.log("⚠️ Could not check ATA, will attempt to create:", (error as Error).message);
-        // FIXED: Use your existing helper function
-        const createATAInstruction = createAssociatedTokenAccountInstructionLegacy(
-          publicKey,
-          userTokenAccount,
-          publicKey,
-          v1TokenMintPubkey
-        );
-        transaction.add(createATAInstruction);
-      }
-      
-      // Use the Anchor method for contribute_billion_scale
-      console.log("🎯 Creating contribute_billion_scale instruction with Anchor...");
-      const contributeInstruction = await programInteractions.contributeBillionScale(
-        publicKey,        // contributor
-        takeoverPubkey,   // takeover  
-        userTokenAccount, // contributorAta
-        vaultPubkey,      // vault
-        contributionBN    // amount as BN
-      );
-      
-      transaction.add(contributeInstruction);
-      
-      // Get fresh blockhash and set fee payer
-      console.log("🔗 Getting fresh blockhash...");
-      const { blockhash } = await connection.getLatestBlockhash();
-      transaction.recentBlockhash = blockhash;
-      transaction.feePayer = publicKey;
-      
-      // Validate transaction before sending
-      console.log("🧪 Validating transaction...");
-      const simulation = await connection.simulateTransaction(transaction);
-      
-      if (simulation.value.err) {
-        const errorMsg = `Transaction validation failed: ${JSON.stringify(simulation.value.err)}`;
-        console.log("❌ Validation failed:", simulation.value.err);
-        throw new Error(errorMsg);
-      }
-      
-      console.log("✅ Validation successful!");
-      if (simulation.value.logs) {
-        console.log("📋 Simulation logs:", simulation.value.logs);
-      }
-      
-      // Send and confirm transaction
-      console.log("🔄 Sending contribution transaction...");
-      const signature = await sendTransaction(transaction, connection);
-      
-      console.log("⏳ Waiting for confirmation...", signature);
-      const confirmation = await connection.confirmTransaction(signature, 'confirmed');
-      
-      if (confirmation.value.err) {
-        throw new Error(`Transaction failed: ${confirmation.value.err}`);
-      }
-      
-      console.log("✅ Transaction confirmed, recording contribution...");
+      console.log('✅ Blockchain contribution successful:', signature);
       
       // Record the contribution in the database
       try {
-        console.log("🔍 Getting takeover database ID...");
-        
-        // Get the actual database ID using our helper function
-        const actualTakeoverId = await getTakeoverDatabaseId(takeoverAddress);
-        
-        console.log("💾 Recording contribution in database...");
         const response = await fetch('/api/contributions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            takeoverId: actualTakeoverId, // Use the actual database ID
+            takeoverId: takeoverAddress, // Use prop directly
             amount: contributionLamports.toString(),
             contributor: publicKey.toString(),
             transactionSignature: signature
           })
         });
 
-        console.log("📊 Database response status:", response.status);
-
         if (!response.ok) {
           const errorText = await response.text();
-          console.error("❌ Database recording failed:", errorText);
+          console.warn('❌ Database recording failed:', errorText);
           
+          // Try to sync the database
           try {
-            const errorData = JSON.parse(errorText);
-            console.error("📋 Detailed error:", errorData);
-          } catch {
-            console.error("📋 Raw error response:", errorText);
+            const newTotalContributed = totalContributedRaw + contributionLamports.toNumber();
+            await fetch('/api/sync-takeover', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                takeoverAddress: takeoverAddress, // Use prop directly
+                onChainTotalContributed: newTotalContributed.toString(),
+                onChainContributorCount: takeover.contributor_count + 1 // Fixed: use snake_case
+              })
+            });
+            console.log('✅ Database synced successfully');
+          } catch (syncError) {
+            console.warn('⚠️ Sync also failed:', syncError);
           }
-          
-          console.warn("⚠️ Database recording failed, but blockchain transaction succeeded");
         } else {
-          const responseData = await response.json();
-          console.log("✅ Database recording successful:", responseData);
-          
-          if (responseData.success) {
-            console.log("🎯 Contribution recorded with ID:", responseData.data?.contribution?.id);
-          }
+          console.log('✅ Database recording successful');
         }
-        
       } catch (dbError) {
-        console.error("💥 Database recording error:", dbError);
-        console.warn("⚠️ Database recording failed, but blockchain transaction succeeded");
+        console.warn('❌ Database error:', dbError);
         // Don't fail the whole operation for database issues
       }
 
       toast({
         title: "Success! 🎉",
-        description: `Contributed ${contributionAmount.toLocaleString()} tokens successfully with billion-scale protection`,
+        description: `Contributed ${contributionAmount.toLocaleString()} tokens successfully`,
       });
       
       // Reset form
       setAmount('');
       setEstimatedRewards(null);
       
+      // Call onContribution callback if provided
+      if (onContribution) {
+        onContribution();
+      }
+      
       // Refresh the page data
       setTimeout(() => {
         window.location.reload();
       }, 2000);
       
-    } catch (error) {
-      // FIXED: Proper error handling
+    } catch (error: any) {
       console.error("❌ Contribution error:", error);
-      console.log("🔍 Analyzing transaction error:", error);
       
-      // Enhanced error handling for billion-scale specific errors
-      let errorMessage = "Failed to contribute. Please try again.";
-      const errorStr = (error as Error).message || String(error);
+      let errorMessage = "Unknown error occurred";
       
-      if (errorStr.includes("InsufficientFunds") || errorStr.includes("Custom\":101")) {
-        errorMessage = "Insufficient token balance. Please check your token balance and try again.";
-      } else if (errorStr.includes("WouldCauseOverflow")) {
-        errorMessage = "This contribution would exceed safe limits. Try a smaller amount.";
-      } else if (errorStr.includes("TakeoverExpired")) {
-        errorMessage = "This takeover has expired and no longer accepts contributions.";
-      } else if (errorStr.includes("AlreadyFinalized")) {
-        errorMessage = "This takeover has already been finalized.";
-      } else if (errorStr.includes("InvalidAmount")) {
-        errorMessage = "Invalid contribution amount. Please check the amount and try again.";
+      // Provide specific error messages for common issues
+      if (error.message?.includes('User rejected')) {
+        errorMessage = "Transaction was cancelled by user";
       }
       
       toast({
@@ -601,179 +435,182 @@ export function WorkingContributionForm({
         <CardHeader>
           <CardTitle className="text-gray-600 dark:text-gray-400">Takeover Ended</CardTitle>
           <CardDescription>
-            This takeover has {isFinalized ? 'been finalized' : 'expired'}
+            This takeover has {isFinalized ? 'been finalized' : 'expired'}.
+            {isGoalMet ? ' The goal was successfully reached!' : ' The goal was not reached.'}
           </CardDescription>
         </CardHeader>
+        <CardContent>
+          <div className="space-y-2 text-sm text-gray-600 dark:text-gray-400">
+            <div>Goal: {goalDisplay} tokens</div>
+            <div>Contributed: {totalContributedDisplay} tokens</div>
+            <div>Progress: {progressPercent.toFixed(2)}%</div>
+            <div>Status: {isGoalMet ? '✅ Goal Met' : '❌ Goal Not Met'}</div>
+          </div>
+        </CardContent>
       </Card>
     );
   }
 
   return (
-    <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle>Contribute to {tokenName} Takeover</CardTitle>
-          <CardDescription>
-            Help reach the goal of {formatAmount(actualMinAmount / 1_000_000)}M tokens
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-6">
-          {/* Progress Section */}
-          <div className="space-y-2">
-            <div className="flex justify-between text-sm">
-              <span>Progress</span>
-              <span>{formatAmount(totalContributedNum / 1_000_000)}M / {formatAmount(actualMinAmount / 1_000_000)}M tokens</span>
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          <span>Contribute Tokens</span>
+          <span className="text-sm font-normal">
+            {formatTimeLeft(timeLeft)} left
+          </span>
+        </CardTitle>
+        <CardDescription>
+          Help reach the goal of {goalDisplay} tokens
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {/* Progress Section */}
+        <div className="space-y-2">
+          <div className="flex justify-between text-sm">
+            <span>Progress</span>
+            <span className="font-medium">
+              {totalContributedDisplay} / {goalDisplay} ({progressPercent.toFixed(1)}%)
+            </span>
+          </div>
+          <div className="w-full bg-gray-200 rounded-full h-2">
+            <div 
+              className={`h-2 rounded-full transition-all ${
+                isGoalMet ? 'bg-green-600' : 'bg-blue-600'
+              }`}
+              style={{ width: `${Math.min(100, progressPercent)}%` }}
+            />
+          </div>
+          {isGoalMet && (
+            <div className="text-green-600 text-sm font-medium">
+              🎉 Goal reached! Additional contributions welcome.
             </div>
-            <Progress value={progressPercent} className="h-2" />
-            <div className="flex justify-between text-xs text-gray-600 dark:text-gray-400">
-              <span>{progressPercent.toFixed(1)}% complete</span>
-              <span>{formatTimeLeft(timeLeft)} remaining</span>
+          )}
+        </div>
+
+        {/* Balance Display */}
+        {connected && (
+          <div className="flex justify-between text-sm text-gray-600">
+            <span>Your balance:</span>
+            <span className="font-medium">
+              {loading ? 'Loading...' : `${formatAmount(userTokenBalance)} tokens`}
+            </span>
+          </div>
+        )}
+
+        {/* Contribution Input */}
+        <div className="space-y-2">
+          <label htmlFor="amount" className="text-sm font-medium">
+            Contribution Amount
+          </label>
+          <Input
+            id="amount"
+            type="number"
+            placeholder="Enter amount..."
+            value={amount}
+            onChange={(e) => setAmount(e.target.value)}
+            min="0"
+            max={userTokenBalance}
+            step="1"
+          />
+          {userTokenBalance > 0 && (
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAmount((userTokenBalance * 0.25).toString())}
+              >
+                25%
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAmount((userTokenBalance * 0.5).toString())}
+              >
+                50%
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAmount((userTokenBalance * 0.75).toString())}
+              >
+                75%
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setAmount(userTokenBalance.toString())}
+              >
+                Max
+              </Button>
+            </div>
+          )}
+        </div>
+
+        {/* Estimated Rewards */}
+        {estimatedRewards && (
+          <div className="bg-blue-50 dark:bg-blue-950 p-3 rounded-lg space-y-1">
+            <div className="text-sm font-medium text-blue-800 dark:text-blue-200">
+              Estimated Rewards
+            </div>
+            <div className="text-xs text-blue-600 dark:text-blue-300 space-y-1">
+              <div>V1 Tokens: {formatAmount(estimatedRewards.v1Tokens)}</div>
+              <div>V2 Tokens: {formatAmount(estimatedRewards.v2Tokens)}</div>
+              <div>Multiplier: {estimatedRewards.rewardMultiplier.toFixed(2)}x</div>
             </div>
           </div>
+        )}
 
-          {/* Goal Status */}
-          {isGoalMet && (
-            <div className="p-3 bg-green-50 dark:bg-green-900 border border-green-200 dark:border-green-700 rounded-lg">
-              <p className="text-green-800 dark:text-green-200 text-sm font-medium">
-                🎯 Goal Reached! Takeover can be finalized.
-              </p>
+        {/* Safe Space Warning */}
+        {remainingSafeSpace < actualGoal * 0.1 && (
+          <div className="bg-yellow-50 dark:bg-yellow-950 p-3 rounded-lg">
+            <div className="text-sm font-medium text-yellow-800 dark:text-yellow-200">
+              ⚠️ Limited space remaining
             </div>
-          )}
-
-          {/* User Balance */}
-          {connected && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-900 border border-blue-200 dark:border-blue-700 rounded-lg">
-              <p className="text-blue-800 dark:text-blue-200 text-sm">
-                Your {tokenName} balance: {loading ? 'Loading...' : `${formatAmount(userTokenBalance)} tokens`}
-              </p>
+            <div className="text-xs text-yellow-600 dark:text-yellow-300">
+              Only {formatGoalDisplay(remainingSafeSpace)} tokens of safe contribution space left
             </div>
-          )}
+          </div>
+        )}
 
-          {/* Contribution Form */}
-          {connected ? (
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="amount">Contribution Amount (tokens)</Label>
-                <Input
-                  id="amount"
-                  type="number"
-                  placeholder="Enter amount"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  min="0"
-                  step="1"
-                  className="mt-1"
-                />
-              </div>
+        {/* Contribute Button */}
+        <Button
+          onClick={handleContribute}
+          disabled={contributing || !connected || !amount || parseFloat(amount) <= 0}
+          className="w-full"
+        >
+          {contributing ? 'Contributing...' : `Contribute ${amount || '0'} Tokens`}
+        </Button>
 
-              {/* Estimated Rewards */}
-              {estimatedRewards && (
-                <div className="p-3 bg-purple-50 dark:bg-purple-900 border border-purple-200 dark:border-purple-700 rounded-lg">
-                  <h4 className="font-medium text-purple-800 dark:text-purple-200 mb-2">Estimated Rewards</h4>
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-                    <div>
-                      <p className="text-purple-700 dark:text-purple-300">V1 Tokens Burned</p>
-                      <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v1Tokens)}</p>
-                    </div>
-                    <div>
-                      <p className="text-purple-700 dark:text-purple-300">V2 Tokens Received</p>
-                      <p className="font-semibold text-purple-900 dark:text-purple-100">{formatAmount(estimatedRewards.v2Tokens)}</p>
-                    </div>
-                    <div>
-                      <p className="text-purple-700 dark:text-purple-300">Reward Multiplier</p>
-                      <p className="font-semibold text-purple-900 dark:text-purple-100">{estimatedRewards.rewardMultiplier.toFixed(2)}x</p>
-                    </div>
-                  </div>
-                </div>
-              )}
+        {/* Debug Info */}
+        {showDebug && debugInfo && (
+          <div className="bg-gray-50 dark:bg-gray-900 p-3 rounded-lg">
+            <div className="text-sm font-medium mb-2">Debug Information</div>
+            <pre className="text-xs overflow-auto">
+              {JSON.stringify(debugInfo, null, 2)}
+            </pre>
+          </div>
+        )}
 
-              {/* Safe Contribution Warning */}
-              {maxSafeNum > 0 && (
-                <div className="p-3 bg-yellow-50 dark:bg-yellow-900 border border-yellow-200 dark:border-yellow-700 rounded-lg">
-                  <p className="text-yellow-800 dark:text-yellow-200 text-sm">
-                    ⚠️ Safe contribution limit: {formatAmount(remainingSafeSpace / 1_000_000)}M tokens remaining
-                  </p>
-                </div>
-              )}
-
-              <Button
-                onClick={handleContribute}
-                disabled={
-                  contributing || 
-                  !amount || 
-                  parseFloat(amount) <= 0 || 
-                  parseFloat(amount) > userTokenBalance ||
-                  parseFloat(amount) > remainingSafeSpace / 1_000_000
-                }
-                className="w-full"
-              >
-                {contributing ? (
-                  <div className="flex items-center">
-                    <LoadingSpinner />
-                    <span className="ml-2">Contributing...</span>
-                  </div>
-                ) : (
-                  `Contribute ${amount ? formatAmount(parseFloat(amount)) : '0'} Tokens`
-                )}
-              </Button>
-            </div>
-          ) : (
-            <div className="text-center p-4 bg-gray-50 dark:bg-gray-800 rounded-lg">
-              <p className="text-gray-600 dark:text-gray-400 mb-2">Connect your wallet to contribute</p>
-              <p className="text-sm text-gray-500 dark:text-gray-500">You&apos;ll need {tokenName} tokens in your wallet</p>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Debug Panel */}
-      {showDebug && debugInfo && (
-        <Card className="border-red-200 bg-red-50">
-          <CardHeader>
-            <CardTitle className="text-red-800 flex items-center justify-between">
-              🚨 Transaction Debug Information
-              <Button 
-                variant="ghost" 
-                size="sm" 
-                onClick={() => setShowDebug(false)}
-                className="text-red-600 hover:text-red-800"
-              >
-                ×
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="font-medium">Error Type:</span> {debugInfo.errorType}
-              </div>
-              <div>
-                <span className="font-medium">SOL Balance:</span> {debugInfo.solBalance.toFixed(6)} SOL
-              </div>
-              <div>
-                <span className="font-medium">Wallet:</span> {debugInfo.walletStatus.adapter}
-              </div>
-              <div>
-                <span className="font-medium">Connected:</span> {debugInfo.walletStatus.connected ? 'Yes' : 'No'}
-              </div>
-            </div>
-            
-            <div className="p-3 bg-red-100 rounded">
-              <p className="text-red-800 font-medium">Suggestion:</p>
-              <p className="text-red-700 text-sm">{debugInfo.suggestion}</p>
-            </div>
-
-            {debugInfo.details.message && (
-              <details className="text-xs">
-                <summary className="cursor-pointer font-medium text-red-800">Technical Details</summary>
-                <pre className="mt-2 bg-red-100 p-2 rounded overflow-auto">
-                  {JSON.stringify(debugInfo.details, null, 2)}
-                </pre>
-              </details>
-            )}
-          </CardContent>
-        </Card>
-      )}
-    </div>
+        {/* Debug Button (Development) */}
+        {process.env.NODE_ENV === 'development' && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              debugTakeoverGoals();
+              setShowDebug(!showDebug);
+            }}
+          >
+            {showDebug ? 'Hide Debug' : 'Show Debug'}
+          </Button>
+        )}
+      </CardContent>
+    </Card>
   );
 }

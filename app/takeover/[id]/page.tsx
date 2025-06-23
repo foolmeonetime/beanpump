@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { LoadingSpinner } from '@/components/loading-spinner';
 import { useToast } from '@/components/ui/use-toast';
-import { WorkingContributionForm } from '@/components/working-contribution-form';
+import WorkingContributionForm from '@/components/working-contribution-form';
 
 // Types for the takeover data
 interface ProcessedTakeoverData {

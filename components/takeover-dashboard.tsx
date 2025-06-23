@@ -13,7 +13,7 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { WorkingContributionForm } from "./working-contribution-form";
+import WorkingContributionForm from "./working-contribution-form";
 
 // Helper function to get associated token address (compatible with older SPL versions)
 const getAssociatedTokenAddressSync = (mint: PublicKey, owner: PublicKey): PublicKey => {
