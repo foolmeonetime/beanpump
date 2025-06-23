@@ -1,4 +1,3 @@
-// app/claim/[address]/page.tsx - Specific takeover claims page
 "use client";
 
 import { useEffect, useState } from "react";

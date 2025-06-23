@@ -1,8 +1,7 @@
-// app/api/debug-middleware/route.ts
-// Test each middleware component individually to isolate the issue
-
 import { NextRequest, NextResponse } from 'next/server';
 import { Pool } from 'pg';
+
+export const dynamic = 'force-dynamic';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

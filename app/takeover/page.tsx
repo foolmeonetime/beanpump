@@ -1,10 +1,6 @@
-import { TakeoversList } from '@/components/takeovers-list';
-import { Metadata } from 'next';
+"use client";
 
-export const metadata: Metadata = {
-  title: 'All Takeovers | Takeover System',
-  description: 'Browse all active and completed Solana token takeovers',
-};
+import { TakeoversList } from '@/components/takeovers-list';
 
 export default function TakeoversPage() {
   return (

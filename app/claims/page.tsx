@@ -1,4 +1,3 @@
-// app/claims/page.tsx - Enhanced with comprehensive debugging while preserving all functionality
 "use client";
 
 import { useEffect, useState } from "react";
