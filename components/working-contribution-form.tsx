@@ -227,7 +227,7 @@ export default function WorkingContributionForm(props: ContributionFormProps) {
 
     // Create contribution instruction with exact discriminator from IDL
     const instructionData = Buffer.alloc(16);
-    const discriminator = [14, 89, 55, 236, 195, 138, 27, 103];
+    const discriminator = [14, 10, 23, 114, 130, 172, 248, 38];
     discriminator.forEach((byte, index) => {
       instructionData.writeUInt8(byte, index);
     });

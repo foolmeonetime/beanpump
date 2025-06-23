@@ -493,10 +493,16 @@ export class LiquidityModeManager {
       transaction.add(createATAInstruction);
     }
 
-    // Create contribute instruction data using contribute_billion_scale discriminator
-    const instructionData = Buffer.alloc(9);
-    instructionData.writeUInt8(14, 0); // contribute_billion_scale instruction discriminator
-    instructionData.writeBigUInt64LE(contributionLamports, 1);
+    const instructionData = Buffer.alloc(16); // 8 bytes discriminator + 8 bytes amount
+const discriminator = [14, 10, 23, 114, 130, 172, 248, 38]; // Complete discriminator from IDL
+
+// Write the complete discriminator
+discriminator.forEach((byte, index) => {
+  instructionData.writeUInt8(byte, index);
+});
+
+// Write amount starting at byte 8 (after the discriminator)
+instructionData.writeBigUInt64LE(contributionLamports, 8);
 
     // Create the contribute instruction
     const contributeInstruction = new TransactionInstruction({
