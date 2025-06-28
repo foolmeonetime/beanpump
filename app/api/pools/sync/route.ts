@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Pool } from 'pg';
-import { globalLPSimulator } from '@/lib/enhanced-lp-simulator';
 
 // Database connection using your existing setup
 const pool = new Pool({
@@ -8,22 +7,96 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
 });
 
+export async function GET(request: NextRequest) {
+  console.log('📊 Pool data requested for client sync');
+  
+  const client = await pool.connect();
+  
+  try {
+    // Query for successful, finalized takeovers with v2 tokens
+    const query = `
+      SELECT 
+        t.id as takeover_id,
+        t.address as takeover_address,
+        t.token_name,
+        t.v2_token_mint,
+        t.v2_total_supply,
+        t.liquidity_pool_tokens,
+        t.sol_for_liquidity,
+        t.total_contributed,
+        t.is_finalized,
+        t.is_successful,
+        t.has_v2_mint,
+        t.created_at,
+        lp.initial_token_reserve,
+        lp.initial_sol_reserve,
+        lp.is_active,
+        lp.created_at as pool_created_at
+      FROM takeovers t
+      LEFT JOIN liquidity_pools lp ON t.id = lp.takeover_id
+      WHERE t.is_finalized = true 
+        AND t.is_successful = true 
+        AND t.v2_token_mint IS NOT NULL
+        AND COALESCE(t.has_v2_mint, false) = true
+      ORDER BY t.created_at DESC
+    `;
+
+    const result = await client.query(query);
+    
+    console.log(`📊 Found ${result.rows.length} finalized successful takeovers`);
+
+    return NextResponse.json({
+      success: true,
+      pools: result.rows,
+      poolCount: result.rows.length,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error: any) {
+    console.error('💥 Pool data fetch failed:', error);
+    return NextResponse.json({
+      success: false,
+      error: error.message
+    }, { status: 500 });
+    
+  } finally {
+    client.release();
+  }
+}
+
 export async function POST(request: NextRequest) {
   console.log('🔄 Manual pool sync requested');
   
   const client = await pool.connect();
   
   try {
-    // Force sync with database
-    await globalLPSimulator.syncWithDatabase();
+    // Get updated pool counts and stats
+    const allPoolsQuery = `
+      SELECT 
+        t.id as takeover_id,
+        t.address as takeover_address,
+        t.token_name,
+        t.v2_token_mint,
+        t.v2_total_supply,
+        t.liquidity_pool_tokens,
+        t.sol_for_liquidity,
+        t.total_contributed,
+        t.is_finalized,
+        t.is_successful,
+        t.has_v2_mint,
+        t.created_at
+      FROM takeovers t
+      WHERE t.is_finalized = true 
+        AND t.is_successful = true 
+        AND t.v2_token_mint IS NOT NULL
+        AND COALESCE(t.has_v2_mint, false) = true
+      ORDER BY t.created_at DESC
+    `;
     
-    // Get updated pool counts
-    const allPools = globalLPSimulator.getAllPools();
-    const databasePools = allPools.filter(p => p.isFromDatabase);
-    const simulatedPools = allPools.filter(p => !p.isFromDatabase);
+    const poolsResult = await client.query(allPoolsQuery);
     
     // Also check for newly finalized takeovers that might need pools
-    const query = `
+    const statsQuery = `
       SELECT 
         COUNT(*) as total_finalized,
         COUNT(CASE WHEN is_successful = true THEN 1 END) as successful_count,
@@ -32,13 +105,11 @@ export async function POST(request: NextRequest) {
       WHERE is_finalized = true
     `;
     
-    const result = await client.query(query);
-    const stats = result.rows[0];
+    const statsResult = await client.query(statsQuery);
+    const stats = statsResult.rows[0];
     
     console.log('📊 Pool sync completed:', {
-      totalPools: allPools.length,
-      databasePools: databasePools.length,
-      simulatedPools: simulatedPools.length,
+      databasePools: poolsResult.rows.length,
       totalFinalized: stats.total_finalized,
       successfulTakeovers: stats.successful_count,
       withV2Mint: stats.with_v2_mint
@@ -46,15 +117,16 @@ export async function POST(request: NextRequest) {
     
     return NextResponse.json({
       success: true,
-      poolsFound: databasePools.length,
-      totalPools: allPools.length,
+      pools: poolsResult.rows,
+      poolsFound: poolsResult.rows.length,
+      totalPools: poolsResult.rows.length,
       stats: {
-        databasePools: databasePools.length,
-        simulatedPools: simulatedPools.length,
+        databasePools: poolsResult.rows.length,
         totalFinalized: parseInt(stats.total_finalized) || 0,
         successfulTakeovers: parseInt(stats.successful_count) || 0,
         withV2Mint: parseInt(stats.with_v2_mint) || 0
-      }
+      },
+      timestamp: new Date().toISOString()
     });
     
   } catch (error: any) {
@@ -66,43 +138,5 @@ export async function POST(request: NextRequest) {
     
   } finally {
     client.release();
-  }
-}
-
-export async function GET(request: NextRequest) {
-  console.log('📊 Pool sync status requested');
-  
-  try {
-    // Get current pool state without syncing
-    const allPools = globalLPSimulator.getAllPools();
-    const databasePools = allPools.filter(p => p.isFromDatabase);
-    const simulatedPools = allPools.filter(p => !p.isFromDatabase);
-    
-    return NextResponse.json({
-      success: true,
-      pools: allPools.map(pool => ({
-        id: pool.id,
-        tokenSymbol: pool.tokenSymbol,
-        isFromDatabase: pool.isFromDatabase,
-        takeoverAddress: pool.takeoverAddress,
-        totalValueLocked: pool.totalValueLocked,
-        transactionCount: pool.transactions.length,
-        lastSync: pool.lastDatabaseSync,
-        createdAt: pool.createdAt
-      })),
-      stats: {
-        totalPools: allPools.length,
-        databasePools: databasePools.length,
-        simulatedPools: simulatedPools.length,
-        lastSyncTime: Math.max(...databasePools.map(p => p.lastDatabaseSync), 0)
-      }
-    });
-    
-  } catch (error: any) {
-    console.error('💥 Pool status query failed:', error);
-    return NextResponse.json({
-      success: false,
-      error: error.message
-    }, { status: 500 });
   }
 }

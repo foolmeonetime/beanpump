@@ -1,12 +1,3 @@
-import { Pool, PoolClient } from 'pg';
-import { PublicKey } from '@solana/web3.js';
-
-// Database connection using your existing setup
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
-});
-
 export interface DatabasePoolData {
   takeoverId: number;
   takeoverAddress: string;
@@ -86,95 +77,75 @@ export class EnhancedLiquiditySimulator {
   private isDestroyed: boolean = false;
 
   constructor() {
-    this.startDatabaseSync();
+    // Only start sync on client side, not during build
+    if (typeof window !== 'undefined') {
+      this.startApiSync();
+    }
   }
 
   /**
-   * Start periodic sync with database for finalized takeovers
+   * Start periodic sync with database through API calls
    */
-  private startDatabaseSync() {
-    if (this.isDestroyed) return;
+  private startApiSync() {
+    if (this.isDestroyed || typeof window === 'undefined') return;
     
-    // Sync every 30 seconds
+    // Sync every 30 seconds via API
     this.databaseSyncInterval = setInterval(async () => {
       if (this.isDestroyed) return;
       
       try {
-        await this.syncWithDatabase();
+        await this.syncWithDatabaseViaAPI();
       } catch (error) {
         console.error('🔄 Database sync failed:', error);
       }
     }, 30000);
 
     // Initial sync
-    this.syncWithDatabase().catch(error => {
+    this.syncWithDatabaseViaAPI().catch(error => {
       console.error('🔄 Initial database sync failed:', error);
     });
   }
 
   /**
-   * Sync pools with database for finalized successful takeovers
+   * Sync pools with database via API call
    */
-  async syncWithDatabase(): Promise<void> {
-    if (this.isDestroyed) return;
+  async syncWithDatabaseViaAPI(): Promise<void> {
+    if (this.isDestroyed || typeof window === 'undefined') return;
     
-    console.log('🔄 Syncing LP simulator with database...');
+    console.log('🔄 Syncing LP simulator with database via API...');
 
-    let client: PoolClient | null = null;
-    
     try {
-      client = await pool.connect();
-      
-      // Query for successful, finalized takeovers with v2 tokens
-      const query = `
-        SELECT 
-          t.id as takeover_id,
-          t.address as takeover_address,
-          t.token_name,
-          t.v2_token_mint,
-          t.v2_total_supply,
-          t.liquidity_pool_tokens,
-          t.sol_for_liquidity,
-          t.total_contributed,
-          t.is_finalized,
-          t.is_successful,
-          t.has_v2_mint,
-          t.created_at,
-          lp.initial_token_reserve,
-          lp.initial_sol_reserve,
-          lp.is_active,
-          lp.created_at as pool_created_at
-        FROM takeovers t
-        LEFT JOIN liquidity_pools lp ON t.id = lp.takeover_id
-        WHERE t.is_finalized = true 
-          AND t.is_successful = true 
-          AND t.v2_token_mint IS NOT NULL
-          AND COALESCE(t.has_v2_mint, false) = true
-        ORDER BY t.created_at DESC
-      `;
+      const response = await fetch('/api/pools/sync', {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
 
-      const result = await client.query(query);
-      
-      console.log(`📊 Found ${result.rows.length} finalized successful takeovers`);
+      if (!response.ok) {
+        throw new Error(`API sync failed: ${response.statusText}`);
+      }
 
-      for (const row of result.rows) {
-        if (this.isDestroyed) break;
-        await this.createOrUpdatePoolFromDatabase(row);
+      const data = await response.json();
+      
+      if (data.success && data.pools) {
+        // Update pools with data from API
+        for (const poolData of data.pools) {
+          await this.createOrUpdatePoolFromData(poolData);
+        }
+        
+        console.log(`📊 Synced ${data.pools.length} pools from database`);
       }
 
     } catch (error) {
-      console.error('💥 Database sync error:', error);
-    } finally {
-      if (client) {
-        client.release();
-      }
+      console.error('💥 API sync error:', error);
     }
   }
 
   /**
-   * Create or update a pool from database data
+   * Create or update a pool from API data
    */
-  private async createOrUpdatePoolFromDatabase(dbData: any): Promise<void> {
+  private async createOrUpdatePoolFromData(dbData: any): Promise<void> {
     if (this.isDestroyed) return;
     
     const poolId = `takeover_${dbData.takeover_address}`;
@@ -258,15 +229,15 @@ export class EnhancedLiquiditySimulator {
   }
 
   /**
-   * Get pool by ID with automatic database fallback
+   * Get pool by ID with automatic API fallback
    */
   async getPool(poolId: string): Promise<EnhancedSimulatedPool | null> {
     let pool = this.pools.get(poolId);
     
     if (!pool && poolId.startsWith('takeover_')) {
-      // Try to load from database
+      // Try to load from API
       const takeoverAddress = poolId.replace('takeover_', '');
-      await this.loadPoolFromDatabase(takeoverAddress);
+      await this.loadPoolFromAPI(takeoverAddress);
       pool = this.pools.get(poolId);
     }
     
@@ -274,48 +245,23 @@ export class EnhancedLiquiditySimulator {
   }
 
   /**
-   * Load a specific pool from database
+   * Load a specific pool from API
    */
-  private async loadPoolFromDatabase(takeoverAddress: string): Promise<void> {
-    if (this.isDestroyed) return;
-    
-    let client: PoolClient | null = null;
+  private async loadPoolFromAPI(takeoverAddress: string): Promise<void> {
+    if (this.isDestroyed || typeof window === 'undefined') return;
     
     try {
-      client = await pool.connect();
+      const response = await fetch(`/api/pools/takeover/${takeoverAddress}`);
       
-      const query = `
-        SELECT 
-          t.id as takeover_id,
-          t.address as takeover_address,
-          t.token_name,
-          t.v2_token_mint,
-          t.v2_total_supply,
-          t.liquidity_pool_tokens,
-          t.sol_for_liquidity,
-          t.is_finalized,
-          t.is_successful,
-          t.has_v2_mint,
-          t.created_at
-        FROM takeovers t
-        WHERE t.address = $1
-          AND t.is_finalized = true 
-          AND t.is_successful = true 
-          AND t.v2_token_mint IS NOT NULL
-      `;
-
-      const result = await client.query(query, [takeoverAddress]);
-      
-      if (result.rows.length > 0) {
-        await this.createOrUpdatePoolFromDatabase(result.rows[0]);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.pool) {
+          await this.createOrUpdatePoolFromData(data.pool);
+        }
       }
 
     } catch (error) {
-      console.error('💥 Error loading pool from database:', error);
-    } finally {
-      if (client) {
-        client.release();
-      }
+      console.error('💥 Error loading pool from API:', error);
     }
   }
 
@@ -338,37 +284,44 @@ export class EnhancedLiquiditySimulator {
     let newSolReserve: number;
     let newTokenReserve: number;
 
-    // Constant product formula: x * y = k
-    const k = pool.solReserve * pool.tokenReserve;
-
+    // Calculate output using constant product formula (x * y = k)
     if (inputToken === 'SOL') {
+      // SOL -> TOKEN
       newSolReserve = pool.solReserve + amountAfterFee;
-      newTokenReserve = k / newSolReserve;
+      newTokenReserve = (pool.solReserve * pool.tokenReserve) / newSolReserve;
       outputAmount = pool.tokenReserve - newTokenReserve;
     } else {
+      // TOKEN -> SOL
       newTokenReserve = pool.tokenReserve + amountAfterFee;
-      newSolReserve = k / newTokenReserve;
+      newSolReserve = (pool.solReserve * pool.tokenReserve) / newTokenReserve;
       outputAmount = pool.solReserve - newSolReserve;
     }
 
     // Calculate price impact
     const oldPrice = pool.solReserve / pool.tokenReserve;
     const newPrice = newSolReserve / newTokenReserve;
-    const priceImpact = Math.abs(newPrice - oldPrice) / oldPrice;
+    const priceImpact = Math.abs((newPrice - oldPrice) / oldPrice);
 
-    // Check slippage tolerance
-    if (priceImpact > slippageTolerance) {
-      throw new Error(`Slippage too high: ${(priceImpact * 100).toFixed(2)}% > ${(slippageTolerance * 100).toFixed(2)}%`);
-    }
+    // Calculate slippage
+    const expectedOutput = inputToken === 'SOL' 
+      ? (amountAfterFee / oldPrice)
+      : (amountAfterFee * oldPrice);
+    const slippage = Math.abs((expectedOutput - outputAmount) / expectedOutput);
 
-    return {
+    const result: SwapResult = {
       outputAmount,
       priceImpact,
       fee,
       newSolReserve,
       newTokenReserve,
-      slippage: priceImpact
+      slippage
     };
+
+    // Log the swap for debugging
+    console.log(`🔄 Simulated swap: ${inputAmount / (inputToken === 'SOL' ? 1e9 : 1e6)} ${inputToken} → ${result.outputAmount / (inputToken === 'SOL' ? 1e6 : 1e9)} ${inputToken === 'SOL' ? pool.tokenSymbol : 'SOL'}`);
+    console.log(`Price impact: ${(result.priceImpact * 100).toFixed(2)}%`);
+
+    return result;
   }
 
   /**
@@ -378,44 +331,55 @@ export class EnhancedLiquiditySimulator {
     poolId: string,
     inputToken: 'SOL' | 'TOKEN',
     inputAmount: number,
-    user: string = 'simulator',
+    userAddress: string = 'simulator',
     slippageTolerance: number = 0.01
   ): SwapResult | null {
     const result = this.simulateSwap(poolId, inputToken, inputAmount, slippageTolerance);
     if (!result) return null;
 
-    const pool = this.pools.get(poolId)!;
+    const pool = this.pools.get(poolId);
+    if (!pool) return null;
+
+    // Check slippage tolerance
+    if (result.slippage > slippageTolerance) {
+      throw new Error(`Slippage ${(result.slippage * 100).toFixed(2)}% exceeds tolerance ${(slippageTolerance * 100).toFixed(2)}%`);
+    }
 
     // Update pool reserves
     pool.solReserve = result.newSolReserve;
     pool.tokenReserve = result.newTokenReserve;
     pool.volume24h += inputAmount;
-    pool.totalValueLocked = pool.solReserve * 2; // Update TVL
+    pool.totalValueLocked = pool.solReserve * 2; // Simplified TVL
 
-    // Add transaction record
+    // Add transaction
     const transaction: PoolTransaction = {
-      id: `swap_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+      id: `${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
       type: 'swap',
       timestamp: Date.now(),
-      user,
+      user: userAddress,
       solAmount: inputToken === 'SOL' ? inputAmount : result.outputAmount,
       tokenAmount: inputToken === 'TOKEN' ? inputAmount : result.outputAmount,
       priceImpact: result.priceImpact,
       fee: result.fee
     };
+
     pool.transactions.push(transaction);
 
-    // Update price history
-    const newPrice = pool.solReserve / pool.tokenReserve;
+    // Add price point
     pool.priceHistory.push({
       timestamp: Date.now(),
-      price: newPrice,
+      price: pool.solReserve / pool.tokenReserve,
       solReserve: pool.solReserve,
       tokenReserve: pool.tokenReserve
     });
 
-    console.log(`💱 Swap executed on ${pool.tokenSymbol}: ${inputAmount / (inputToken === 'SOL' ? 1e9 : 1e6)} ${inputToken} → ${result.outputAmount / (inputToken === 'SOL' ? 1e6 : 1e9)} ${inputToken === 'SOL' ? pool.tokenSymbol : 'SOL'}`);
-    console.log(`Price impact: ${(result.priceImpact * 100).toFixed(2)}%`);
+    // Keep only last 1000 transactions and 1000 price points
+    if (pool.transactions.length > 1000) {
+      pool.transactions = pool.transactions.slice(-1000);
+    }
+    if (pool.priceHistory.length > 1000) {
+      pool.priceHistory = pool.priceHistory.slice(-1000);
+    }
 
     return result;
   }
@@ -503,7 +467,7 @@ export class EnhancedLiquiditySimulator {
   }
 
   /**
-   * Cleanup and stop database sync
+   * Cleanup and stop sync
    */
   cleanup(): void {
     this.isDestroyed = true;
