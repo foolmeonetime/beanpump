@@ -5,16 +5,21 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useToast } from "@/components/ui/use-toast";
 import { LoadingSpinner } from "@/components/loading-spinner";
 import { PoolAnalyticsComponent } from "@/components/pool-analytics";
-import { SimulatedPool } from "@/lib/lp-simulator";
+import { globalLPSimulator, type EnhancedSimulatedPool } from "@/lib/enhanced-lp-simulator";
+import { Database, TrendingUp, TrendingDown, Activity, DollarSign } from "lucide-react";
 
 export default function PoolsPage() {
-  const [pools, setPools] = useState<SimulatedPool[]>([]);
+  const [pools, setPools] = useState<EnhancedSimulatedPool[]>([]);
   const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
   const [selectedPool, setSelectedPool] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [activeTab, setActiveTab] = useState("all");
   const [createForm, setCreateForm] = useState({
     tokenMint: "",
     tokenSymbol: "",
@@ -26,19 +31,22 @@ export default function PoolsPage() {
 
   useEffect(() => {
     fetchPools();
+    
+    // Auto-refresh every 30 seconds to catch newly finalized takeovers
+    const interval = setInterval(fetchPools, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   const fetchPools = async () => {
     try {
       setLoading(true);
-      const response = await fetch('/api/pools');
-      const data = await response.json();
       
-      if (data.success) {
-        setPools(data.pools);
-      } else {
-        throw new Error(data.error);
-      }
+      // Get pools from enhanced simulator (automatically syncs with database)
+      const allPools = globalLPSimulator.getAllPools();
+      setPools(allPools);
+      
+      console.log(`📊 Loaded ${allPools.length} pools (${allPools.filter(p => p.isFromDatabase).length} from database)`);
+      
     } catch (error: any) {
       console.error('Error fetching pools:', error);
       toast({
@@ -51,12 +59,47 @@ export default function PoolsPage() {
     }
   };
 
+  const forceDatabaseSync = async () => {
+    try {
+      setSyncing(true);
+      
+      // Force database sync through API
+      const response = await fetch('/api/pools/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        await fetchPools();
+        toast({
+          title: "🔄 Database Sync Complete",
+          description: `Synchronized ${data.poolsFound || 0} pools from finalized takeovers`,
+          duration: 5000
+        });
+      } else {
+        throw new Error(data.error);
+      }
+    } catch (error: any) {
+      console.error('Error syncing database:', error);
+      toast({
+        title: "Sync Failed",
+        description: error.message,
+        variant: "destructive"
+      });
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const createPool = async (e: React.FormEvent) => {
     e.preventDefault();
     
     try {
       setLoading(true);
       
+      // Create pool through simulator API
       const response = await fetch('/api/pools', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -136,6 +179,21 @@ export default function PoolsPage() {
     }
   };
 
+  // Filter pools based on active tab
+  const filteredPools = pools.filter(pool => {
+    switch (activeTab) {
+      case "database":
+        return pool.isFromDatabase;
+      case "simulated":
+        return !pool.isFromDatabase;
+      default:
+        return true;
+    }
+  });
+
+  const databasePools = pools.filter(p => p.isFromDatabase);
+  const simulatedPools = pools.filter(p => !p.isFromDatabase);
+
   if (loading && pools.length === 0) {
     return (
       <div className="flex flex-col justify-center items-center h-64 space-y-4">
@@ -152,11 +210,19 @@ export default function PoolsPage() {
         <div>
           <h1 className="text-3xl font-bold">Liquidity Pool Simulator</h1>
           <p className="text-gray-600 dark:text-gray-300 mt-2">
-            Test trading mechanics for your tokens before creating real pools
+            Monitor real takeover pools and test trading mechanics
           </p>
         </div>
         <div className="flex gap-2">
-          <Button onClick={fetchPools} variant="outline">
+          <Button 
+            onClick={forceDatabaseSync} 
+            variant="outline"
+            disabled={syncing}
+          >
+            {syncing ? <LoadingSpinner className="mr-2" /> : <Database className="w-4 h-4 mr-2" />}
+            Sync Database
+          </Button>
+          <Button onClick={fetchPools} variant="outline" disabled={loading}>
             Refresh
           </Button>
           <Button onClick={() => setShowCreateForm(!showCreateForm)}>
@@ -165,12 +231,67 @@ export default function PoolsPage() {
         </div>
       </div>
 
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center space-x-2">
+              <Database className="w-5 h-5 text-blue-500" />
+              <div>
+                <p className="text-2xl font-bold">{databasePools.length}</p>
+                <p className="text-sm text-gray-600">Real Takeover Pools</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center space-x-2">
+              <Activity className="w-5 h-5 text-green-500" />
+              <div>
+                <p className="text-2xl font-bold">{simulatedPools.length}</p>
+                <p className="text-sm text-gray-600">Test Simulations</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center space-x-2">
+              <DollarSign className="w-5 h-5 text-yellow-500" />
+              <div>
+                <p className="text-2xl font-bold">
+                  {databasePools.reduce((sum, pool) => sum + pool.totalValueLocked, 0).toFixed(1)}
+                </p>
+                <p className="text-sm text-gray-600">Total TVL (SOL)</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardContent className="pt-6">
+            <div className="flex items-center space-x-2">
+              <TrendingUp className="w-5 h-5 text-purple-500" />
+              <div>
+                <p className="text-2xl font-bold">
+                  {pools.reduce((sum, pool) => sum + pool.transactions.length, 0)}
+                </p>
+                <p className="text-sm text-gray-600">Total Transactions</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
       {/* Market Conditions Control */}
       <Card>
         <CardHeader>
           <CardTitle>Market Conditions</CardTitle>
           <CardDescription>
-            Adjust global market conditions to see how they affect all pools
+            Adjust global market conditions to see how they affect all pool simulations
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -213,7 +334,7 @@ export default function PoolsPage() {
           <CardHeader>
             <CardTitle>Create New Pool Simulation</CardTitle>
             <CardDescription>
-              Set up a new liquidity pool for testing trading mechanics
+              Set up a new liquidity pool for testing trading mechanics (this won't affect real pools)
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -277,61 +398,169 @@ export default function PoolsPage() {
               </div>
               
               <Button type="submit" disabled={loading} className="w-full">
-                {loading ? <LoadingSpinner /> : "Create Pool Simulation"}
+                {loading ? <LoadingSpinner /> : "Create Test Pool Simulation"}
               </Button>
             </form>
           </CardContent>
         </Card>
       )}
 
-      {/* Pools List */}
-      {pools.length === 0 ? (
-        <Card>
-          <CardContent className="pt-6 text-center">
-            <h3 className="text-lg font-medium mb-2">No Pool Simulations</h3>
-            <p className="text-gray-500 mb-4">
-              Create your first pool simulation to test trading mechanics
-            </p>
-            <Button onClick={() => setShowCreateForm(true)}>
-              Create First Pool
-            </Button>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="grid gap-4">
-          <h2 className="text-xl font-semibold">Active Pool Simulations ({pools.length})</h2>
-          
-          {pools.map((pool) => (
-            <Card key={pool.id} className="cursor-pointer hover:shadow-md transition-shadow">
-              <CardHeader onClick={() => setSelectedPool(selectedPool === pool.id ? null : pool.id)}>
-                <CardTitle className="flex items-center justify-between">
-                  <span>{pool.tokenSymbol}/SOL Pool</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
-                      {(pool.priceHistory[pool.priceHistory.length - 1]?.price * 1e9 / 1e6 || 0).toFixed(6)} SOL
-                    </span>
-                    <span className="text-xs text-gray-500">
-                      {selectedPool === pool.id ? '▼' : '▶'}
-                    </span>
-                  </div>
-                </CardTitle>
-                <CardDescription>
-                  {pool.transactions.length} transactions • Created {new Date(pool.createdAt).toLocaleDateString()}
-                </CardDescription>
-              </CardHeader>
-              
-              {selectedPool === pool.id && (
-                <CardContent>
-                  <PoolAnalyticsComponent 
-                    poolId={pool.id}
-                    tokenSymbol={pool.tokenSymbol}
-                  />
-                </CardContent>
+      {/* Pools List with Tabs */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Pool Overview</CardTitle>
+          <CardDescription>
+            Real pools are automatically created from successful takeovers
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="all">All Pools ({pools.length})</TabsTrigger>
+              <TabsTrigger value="database">
+                Real Pools ({databasePools.length})
+              </TabsTrigger>
+              <TabsTrigger value="simulated">
+                Test Pools ({simulatedPools.length})
+              </TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="all" className="space-y-4 mt-6">
+              <PoolsList pools={filteredPools} selectedPool={selectedPool} setSelectedPool={setSelectedPool} />
+            </TabsContent>
+
+            <TabsContent value="database" className="space-y-4 mt-6">
+              {databasePools.length === 0 ? (
+                <div className="text-center py-8">
+                  <Database className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium mb-2">No Real Pools Yet</h3>
+                  <p className="text-gray-500 mb-4">
+                    Pools will appear here automatically when takeovers are finalized successfully
+                  </p>
+                  <Button onClick={forceDatabaseSync} variant="outline">
+                    <Database className="w-4 h-4 mr-2" />
+                    Check for New Pools
+                  </Button>
+                </div>
+              ) : (
+                <PoolsList pools={databasePools} selectedPool={selectedPool} setSelectedPool={setSelectedPool} />
               )}
-            </Card>
-          ))}
-        </div>
-      )}
+            </TabsContent>
+
+            <TabsContent value="simulated" className="space-y-4 mt-6">
+              {simulatedPools.length === 0 ? (
+                <div className="text-center py-8">
+                  <Activity className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                  <h3 className="text-lg font-medium mb-2">No Test Pools</h3>
+                  <p className="text-gray-500 mb-4">
+                    Create test pools to experiment with trading mechanics
+                  </p>
+                  <Button onClick={() => setShowCreateForm(true)}>
+                    Create Test Pool
+                  </Button>
+                </div>
+              ) : (
+                <PoolsList pools={simulatedPools} selectedPool={selectedPool} setSelectedPool={setSelectedPool} />
+              )}
+            </TabsContent>
+          </Tabs>
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// Separate component for pools list to reduce complexity
+function PoolsList({ 
+  pools, 
+  selectedPool, 
+  setSelectedPool 
+}: { 
+  pools: EnhancedSimulatedPool[];
+  selectedPool: string | null;
+  setSelectedPool: (id: string | null) => void;
+}) {
+  if (pools.length === 0) {
+    return (
+      <div className="text-center py-8">
+        <p className="text-gray-500">No pools found in this category</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {pools.map((pool) => {
+        const currentPrice = pool.priceHistory[pool.priceHistory.length - 1]?.price || 0;
+        const priceDisplay = (currentPrice * 1e9 / 1e6).toFixed(6);
+        
+        return (
+          <Card key={pool.id} className="cursor-pointer hover:shadow-md transition-shadow">
+            <CardHeader onClick={() => setSelectedPool(selectedPool === pool.id ? null : pool.id)}>
+              <CardTitle className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span>{pool.tokenSymbol}/SOL</span>
+                  {pool.isFromDatabase ? (
+                    <Badge variant="default" className="bg-blue-100 text-blue-800">
+                      <Database className="w-3 h-3 mr-1" />
+                      Real Pool
+                    </Badge>
+                  ) : (
+                    <Badge variant="secondary">
+                      <Activity className="w-3 h-3 mr-1" />
+                      Test Pool
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm bg-gray-100 dark:bg-gray-800 px-2 py-1 rounded">
+                    {priceDisplay} SOL
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    {selectedPool === pool.id ? '▼' : '▶'}
+                  </span>
+                </div>
+              </CardTitle>
+              <CardDescription className="flex items-center justify-between">
+                <span>
+                  {pool.transactions.length} transactions • TVL: {pool.totalValueLocked.toFixed(2)} SOL
+                </span>
+                {pool.isFromDatabase && pool.takeoverAddress && (
+                  <span className="text-xs font-mono">
+                    {pool.takeoverAddress.slice(0, 8)}...
+                  </span>
+                )}
+              </CardDescription>
+            </CardHeader>
+            
+            {selectedPool === pool.id && (
+              <CardContent>
+                <PoolAnalyticsComponent 
+                  poolId={pool.id}
+                  tokenSymbol={pool.tokenSymbol}
+                />
+                
+                {pool.isFromDatabase && (
+                  <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+                    <h4 className="font-medium text-blue-900 dark:text-blue-100 mb-2">
+                      🎯 Real Takeover Pool
+                    </h4>
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      This pool was automatically created from a successful takeover. 
+                      Trading data reflects real potential market conditions.
+                    </p>
+                    {pool.takeoverAddress && (
+                      <p className="text-xs text-blue-700 dark:text-blue-300 mt-2 font-mono">
+                        Takeover: {pool.takeoverAddress}
+                      </p>
+                    )}
+                  </div>
+                )}
+              </CardContent>
+            )}
+          </Card>
+        );
+      })}
     </div>
   );
 }
