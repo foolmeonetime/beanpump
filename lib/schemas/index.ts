@@ -30,6 +30,14 @@ const SolanaAddressSchema = z.string()
 const NumericStringSchema = z.string()
   .regex(/^\d+$/, 'Must contain only digits')
   .refine(
+    (val) => val.length <= 20,
+    { message: 'Number string too long - maximum 20 digits' }
+  )
+  .refine(
+    (val) => !val.startsWith('0') || val === '0',
+    { message: 'Invalid number format - no leading zeros except for zero itself' }
+  )
+  .refine(
     (val) => {
       try {
         const bigIntVal = BigInt(val);
@@ -50,14 +58,6 @@ const NumericStringSchema = z.string()
       }
     },
     { message: 'Number too large - exceeds maximum safe value' }
-  )
-  .refine(
-    (val) => val.length <= 20,
-    { message: 'Number string too long - maximum 20 digits' }
-  )
-  .refine(
-    (val) => !val.startsWith('0') || val === '0',
-    { message: 'Invalid number format - no leading zeros except for zero itself' }
   );
 
 // ✅ ENHANCED: Transaction signature validation with security checks
@@ -171,22 +171,22 @@ const ImageFileSchema = z.any()
 export const GetContributionsQuerySchema = z.object({
   takeover_id: z.string()
     .regex(/^\d+$/, 'Takeover ID must be numeric')
-    .transform(Number)
-    .pipe(z.number().int().positive('Takeover ID must be positive'))
-    .optional(),
+    .optional()
+    .transform((val) => val ? Number(val) : undefined)
+    .pipe(z.number().int().positive('Takeover ID must be positive').optional()),
   contributor: SolanaAddressSchema.optional(),
   limit: z.string()
     .regex(/^\d+$/, 'Limit must be numeric')
-    .transform(Number)
-    .pipe(z.number().int().min(1).max(100, 'Limit must be between 1 and 100'))
     .default('50')
-    .optional(),
+    .optional()
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(100, 'Limit must be between 1 and 100')),
   offset: z.string()
     .regex(/^\d+$/, 'Offset must be numeric')
-    .transform(Number)
-    .pipe(z.number().int().min(0, 'Offset must be non-negative').max(10000, 'Offset too large'))
     .default('0')
-    .optional(),
+    .optional()
+    .transform(Number)
+    .pipe(z.number().int().min(0, 'Offset must be non-negative').max(10000, 'Offset too large')),
   status: z.enum(['all', 'claimed', 'unclaimed', 'pending']).default('all').optional(),
   sort: z.enum(['created_at', 'amount', 'updated_at']).default('created_at').optional(),
   order: z.enum(['asc', 'desc']).default('desc').optional(),
@@ -274,25 +274,25 @@ export const BillionScaleClaimsQuerySchema = z.object({
   status: z.enum(['claimed', 'unclaimed', 'all']).default('all').optional(),
   limit: z.string()
     .regex(/^\d+$/, 'Limit must be numeric')
-    .transform(Number)
-    .pipe(z.number().int().min(1).max(100))
     .default('50')
-    .optional(),
+    .optional()
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(100)),
   offset: z.string()
     .regex(/^\d+$/, 'Offset must be numeric')
-    .transform(Number)
-    .pipe(z.number().int().min(0))
     .default('0')
-    .optional(),
+    .optional()
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
   includeMetadata: z.string()
     .optional()
     .default('false')
     .transform(val => val === 'true'),
   minSupplyBillions: z.string()
     .regex(/^\d+$/, 'Min supply must be numeric')
-    .transform(Number)
-    .refine(val => val >= 1, 'Min supply must be at least 1 billion')
-    .optional(),
+    .optional()
+    .transform((val) => val ? Number(val) : undefined)
+    .pipe(z.number().int().min(1, 'Min supply must be at least 1 billion').optional()),
 }).strict();
 
 export const BillionScaleClaimSchema = z.object({
@@ -325,168 +325,16 @@ export const BillionScaleClaimSchema = z.object({
       }
       return true;
     },
-    { message: 'Estimated slippage required when using Jupiter swap', path: ['estimatedSlippage'] }
-  )
-  .refine(
-    (data: any) => {
-      // Validate contributor and takeover are different
-      if (typeof data.contributor === 'string' && typeof data.takeoverAddress === 'string') {
-        return data.contributor !== data.takeoverAddress;
-      }
-      return true;
-    },
-    { message: 'Contributor cannot be the same as takeover address' }
+    { message: 'Estimated slippage required when Jupiter swap is used', path: ['estimatedSlippage'] }
   );
 
-export const BillionScaleTakeoverSchema = z.object({
-  address: SolanaAddressSchema,
-  authority: SolanaAddressSchema,
-  v1TokenMint: SolanaAddressSchema,
-  vault: SolanaAddressSchema,
-  calculatedMinAmount: TokenAmountSchema,
-  maxSafeTotalContribution: TokenAmountSchema,
-  startTime: z.number()
-    .int('Start time must be an integer')
-    .min(Math.floor(Date.now() / 1000) - 86400, 'Start time cannot be more than 1 day in the past')
-    .max(Math.floor(Date.now() / 1000) + (30 * 86400), 'Start time cannot be more than 30 days in the future'),
-  endTime: z.number()
-    .int('End time must be an integer')
-    .min(Math.floor(Date.now() / 1000) - 86400, 'End time cannot be more than 1 day in the past')
-    .max(Math.floor(Date.now() / 1000) + (365 * 86400), 'End time cannot be more than 1 year in the future'),
-  rewardRateBp: z.number()
-    .int('Reward rate must be an integer')
-    .min(100, 'Reward rate must be at least 1.0x (100bp)')
-    .max(200, 'Reward rate must be at most 2.0x (200bp) for safety'),
-  targetParticipationBp: BasisPointsSchema
-    .min(1, 'Target participation must be at least 0.01%')
-    .max(5000, 'Target participation cannot exceed 50% for safety'),
-  v1MarketPriceLamports: TokenAmountSchema
-    .refine(
-      (val) => {
-        const price = BigInt(val);
-        return price >= BigInt('1000'); // Minimum 0.000001 SOL
-      },
-      { message: 'Price too low - minimum 0.000001 SOL' }
-    )
-    .refine(
-      (val) => {
-        const price = BigInt(val);
-        return price <= BigInt('1000000000000'); // Maximum 1000 SOL
-      },
-      { message: 'Price too high - maximum 1000 SOL' }
-    ),
-  tokenName: z.string()
-    .min(1, 'Token name required')
-    .max(32, 'Token name too long - maximum 32 characters')
-    .regex(/^[a-zA-Z0-9\s\-_]+$/, 'Token name contains invalid characters')
-    .refine(
-      (name) => !name.toLowerCase().includes('scam'),
-      { message: 'Invalid token name' }
-    )
-    .optional(),
-  imageUrl: SecureUrlSchema.optional(),
-  v1TotalSupply: TokenAmountSchema
-    .refine(
-      (val) => {
-        const supply = BigInt(val);
-        return supply >= BigInt('1000000000000000'); // 1B tokens with 6 decimals
-      },
-      { message: 'Total supply too small - minimum 1 billion tokens required for billion-scale mode' }
-    ),
-  v2TotalSupply: TokenAmountSchema.optional(),
-  rewardPoolTokens: TokenAmountSchema
-    .refine(
-      (val) => {
-        const pool = BigInt(val);
-        return pool >= BigInt('150000000000000'); // 15% of 1B tokens minimum
-      },
-      { message: 'Reward pool too small' }
-    ),
-  liquidityPoolTokens: TokenAmountSchema.optional(),
-  safetyUtilizationPercent: z.number()
-    .min(50, 'Safety utilization too low - minimum 50%')
-    .max(98, 'Safety utilization too high - maximum 98%')
-    .default(80)
-    .optional(),
-  conservativeMode: z.boolean().default(true).optional(),
-}).strict()
-  .refine(
-    (data: any) => {
-      // Validate time consistency
-      if (typeof data.endTime === 'number' && typeof data.startTime === 'number') {
-        return data.endTime > data.startTime;
-      }
-      return true;
-    },
-    { message: 'End time must be after start time', path: ['endTime'] }
-  )
-  .refine(
-    (data: any) => {
-      // Validate duration constraints
-      if (typeof data.endTime === 'number' && typeof data.startTime === 'number') {
-        const duration = data.endTime - data.startTime;
-        return duration >= 86400 && duration <= 2592000; // 1 day to 30 days
-      }
-      return true;
-    },
-    { message: 'Duration must be between 1 and 30 days', path: ['endTime'] }
-  )
-  .refine(
-    (data: any) => {
-      // Validate authority is not the same as vault
-      if (typeof data.authority === 'string' && typeof data.vault === 'string') {
-        return data.authority !== data.vault;
-      }
-      return true;
-    },
-    { message: 'Authority cannot be the same as vault', path: ['vault'] }
-  )
-  .refine(
-    (data: any) => {
-      // Validate economic feasibility
-      if (typeof data.maxSafeTotalContribution === 'string' && typeof data.calculatedMinAmount === 'string') {
-        try {
-          const maxContribution = BigInt(data.maxSafeTotalContribution);
-          const minAmount = BigInt(data.calculatedMinAmount);
-          return maxContribution >= minAmount;
-        } catch {
-          return true; // Skip validation if BigInt conversion fails
-        }
-      }
-      return true;
-    },
-    { message: 'Max safe contribution must be at least the minimum amount', path: ['maxSafeTotalContribution'] }
-  )
-  .refine(
-    (data: any) => {
-      // Validate reward pool can support max contribution
-      if (typeof data.rewardPoolTokens === 'string' && 
-          typeof data.maxSafeTotalContribution === 'string' && 
-          typeof data.rewardRateBp === 'number') {
-        try {
-          const rewardPool = BigInt(data.rewardPoolTokens);
-          const maxContribution = BigInt(data.maxSafeTotalContribution);
-          const rewardRate = data.rewardRateBp / 10000;
-          const requiredRewards = maxContribution * BigInt(Math.floor(rewardRate * 10000)) / BigInt(10000);
-          
-          return rewardPool >= requiredRewards;
-        } catch {
-          return true; // Skip validation if calculations fail
-        }
-      }
-      return true;
-    },
-    { message: 'Reward pool insufficient for maximum safe contribution', path: ['rewardPoolTokens'] }
-  );
-
-// ✅ ENHANCED: Finalization schemas with security validation
+// ✅ ENHANCED: Finalization schemas with security validation - FIXED
 export const FinalizeQuerySchema = z.object({
   authority: SolanaAddressSchema.optional(),
   includeMetrics: z.string()
-    .transform(val => val === 'true')
-    .pipe(z.boolean())
-    .default(false)
-    .optional(),
+    .optional()
+    .default('false')
+    .transform(val => val === 'true'),
 }).strict();
 
 export const FinalizeTakeoverSchema = z.object({

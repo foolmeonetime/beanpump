@@ -2,13 +2,19 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useWallet, useConnection } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { PublicKey, Transaction } from "@solana/web3.js";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LoadingSpinner } from "@/components/loading-spinner";
+import { useToast } from "@/components/ui/use-toast";
+import { WalletMultiButton } from "@/components/wallet-multi-button";
+import { 
+  PublicKey, 
+  Transaction,
+  TransactionInstruction
+} from "@solana/web3.js";
+import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
+import Link from "next/link";
 
-// ✅ ENHANCED: Comprehensive type definitions
 interface ClaimDetails {
   id: string;
   takeoverId: string;
@@ -19,10 +25,10 @@ interface ClaimDetails {
   customRewardRate: number;
   claimableAmount: string;
   tokenMint: string;
-  claimType: 'reward' | 'refund';
+  claimType: 'refund' | 'reward';
   vault: string;
   v1TokenMint: string;
-  v2TokenMint: string;
+  v2TokenMint?: string;
   refundAmount: string;
   rewardAmount: string;
   isClaimed: boolean;
@@ -34,315 +40,275 @@ interface ClaimsState {
   claims: ClaimDetails[];
   loading: boolean;
   error: string | null;
-  lastFetchTime: number;
-  processingClaims: Set<string>; // Track which claims are being processed
+  lastFetchTime: number | null;
+  processingClaims: Set<string>;
 }
 
-interface DebugInfo {
-  responseStatus: number;
-  responseTime: number;
-  retryCount: number;
-  requestUrl: string;
-  error?: string;
-}
+// ✅ FIXED: Simplified state management without useReducer
+const initialClaimsState: ClaimsState = {
+  claims: [],
+  loading: false,
+  error: null,
+  lastFetchTime: null,
+  processingClaims: new Set<string>()
+};
 
-interface ApiHealth {
-  endpoints: Record<string, any>;
-}
-
-// ✅ ENHANCED: Type-safe claims debugger with retry logic
+// Debug helpers
 class ClaimsDebugger {
-  private readonly maxRetries = 3;
-  private readonly retryDelay = 1000;
-
-  async fetchClaimsWithDebug(contributor: string, apiEndpoint?: string): Promise<{
-    success: boolean;
-    claims?: ClaimDetails[];
-    error?: string;
-    debugInfo: DebugInfo;
-  }> {
+  async fetchClaimsWithDebug(contributor: string, endpoint: string) {
     const startTime = Date.now();
-    const url = apiEndpoint || `/api/claims?contributor=${contributor}`;
-    
-    let retryCount = 0;
-    let lastError: string | undefined;
-    
-    while (retryCount < this.maxRetries) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-        
-        const response = await fetch(url, {
-          signal: controller.signal,
-          cache: 'no-store'
-        });
-        
-        clearTimeout(timeoutId);
-        const responseTime = Date.now() - startTime;
-        
-        const debugInfo: DebugInfo = {
-          responseStatus: response.status,
-          responseTime,
-          retryCount,
-          requestUrl: url
-        };
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-        
-        const data = await response.json();
-        
-        if (!data.success) {
-          throw new Error(data.error || 'Unknown API error');
-        }
-        
-        return {
-          success: true,
-          claims: data.data?.claims || data.claims,
-          debugInfo
-        };
-        
-      } catch (error: any) {
-        lastError = error.name === 'AbortError' ? 'Request timeout' : error.message;
-        retryCount++;
-        
-        if (retryCount < this.maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, this.retryDelay * retryCount));
-        }
-      }
-    }
-    
-    return {
-      success: false,
-      error: lastError,
-      debugInfo: {
-        responseStatus: 0,
-        responseTime: Date.now() - startTime,
-        retryCount,
-        requestUrl: url,
-        error: lastError
-      }
+    const debugInfo: any = {
+      timestamp: new Date().toISOString(),
+      endpoint,
+      contributor,
+      startTime
     };
+
+    try {
+      const response = await fetch(endpoint, {
+        cache: 'no-store',
+        headers: {
+          'Content-Type': 'application/json',
+        }
+      });
+
+      debugInfo.responseStatus = response.status;
+      debugInfo.responseHeaders = Object.fromEntries(response.headers.entries());
+      
+      const data = await response.json();
+      debugInfo.responseData = data;
+      debugInfo.endTime = Date.now();
+      debugInfo.duration = debugInfo.endTime - startTime;
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${data.error || 'Unknown error'}`);
+      }
+
+      return {
+        success: data.success,
+        claims: data.claims,
+        error: data.error,
+        debugInfo
+      };
+    } catch (error: any) {
+      debugInfo.error = error.message;
+      debugInfo.endTime = Date.now();
+      debugInfo.duration = debugInfo.endTime - startTime;
+      
+      return {
+        success: false,
+        claims: [],
+        error: error.message,
+        debugInfo
+      };
+    }
   }
 
-  async testApiHealth(): Promise<ApiHealth> {
-    const endpoints = ['/api/claims', '/api/takeovers', '/api/contributions'];
-    const results: Record<string, any> = {};
-    
-    await Promise.allSettled(
-      endpoints.map(async (endpoint) => {
-        try {
-          const startTime = Date.now();
-          const response = await fetch(`${endpoint}?test=true`, {
-            signal: AbortSignal.timeout(5000)
-          });
-          const responseTime = Date.now() - startTime;
-          
-          results[endpoint] = {
-            status: response.ok ? 'ok' : 'error',
-            responseTime,
-            statusCode: response.status
-          };
-        } catch (error: any) {
-          results[endpoint] = {
-            status: 'error',
-            responseTime: 0,
-            error: error.message
-          };
-        }
-      })
-    );
-    
-    return { endpoints: results };
+  async testApiHealth() {
+    try {
+      const response = await fetch('/api/health', {
+        cache: 'no-store'
+      });
+      
+      const data = await response.json();
+      
+      return {
+        status: response.status,
+        data,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error: any) {
+      return {
+        status: 'error',
+        error: error.message,
+        timestamp: new Date().toISOString()
+      };
+    }
   }
+}
+
+// Helper to get associated token address
+function getAssociatedTokenAddressLegacy(mint: PublicKey, owner: PublicKey): PublicKey {
+  const [address] = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    new PublicKey("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL")
+  );
+  return address;
 }
 
 export default function ClaimsPage() {
   const { publicKey, signTransaction } = useWallet();
   const { connection } = useConnection();
-  
-  // ✅ FIXED: Comprehensive state management
-  const [claimsState, setClaimsState] = useState<ClaimsState>({
-    claims: [],
-    loading: false,
-    error: null,
-    lastFetchTime: 0,
-    processingClaims: new Set()
-  });
-  
-  const [debugInfo, setDebugInfo] = useState<DebugInfo | null>(null);
-  const [apiHealth, setApiHealth] = useState<ApiHealth | null>(null);
+  const { toast } = useToast();
+
+  // ✅ FIXED: Use useState instead of useReducer for simpler state management
+  const [claimsState, setClaimsState] = useState<ClaimsState>(initialClaimsState);
   const [showDebug, setShowDebug] = useState(false);
-  
-  // ✅ ENHANCED: Refs for preventing race conditions
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [apiHealth, setApiHealth] = useState<any>(null);
+
+  // Refs for cleanup and caching
   const fetchAbortController = useRef<AbortController | null>(null);
-  const lastFetchPromise = useRef<Promise<void> | null>(null);
   const claimsDebugger = useRef(new ClaimsDebugger());
 
-  // ✅ FIXED: Race condition-safe state updates
-  const updateClaimsState = useCallback((updater: (prev: ClaimsState) => ClaimsState) => {
-    setClaimsState(prevState => {
-      const newState = updater(prevState);
-      // Prevent unnecessary re-renders
-      if (JSON.stringify(newState) === JSON.stringify(prevState)) {
-        return prevState;
-      }
-      return newState;
-    });
+  // ✅ FIXED: Helper functions to update state
+  const updateClaimsState = useCallback((updates: Partial<ClaimsState>) => {
+    setClaimsState(prev => ({ ...prev, ...updates }));
   }, []);
 
-  // ✅ ENHANCED: Debounced and race condition-safe fetch
-  const fetchClaims = useCallback(async (forceRefresh: boolean = false): Promise<void> => {
+  const addProcessingClaim = useCallback((claimId: string) => {
+    setClaimsState(prev => ({
+      ...prev,
+      processingClaims: new Set([...prev.processingClaims, claimId])
+    }));
+  }, []);
+
+  const removeProcessingClaim = useCallback((claimId: string) => {
+    setClaimsState(prev => ({
+      ...prev,
+      processingClaims: new Set([...prev.processingClaims].filter(id => id !== claimId))
+    }));
+  }, []);
+
+  // Fetch claims with enhanced error handling
+  const fetchClaims = useCallback(async (forceRefresh = false): Promise<void> => {
     if (!publicKey) {
-      updateClaimsState(prev => ({
-        ...prev,
-        claims: [],
-        error: null,
-        loading: false
-      }));
+      setClaimsState(initialClaimsState);
       return;
     }
 
-    // Prevent multiple simultaneous fetches
-    if (lastFetchPromise.current) {
-      await lastFetchPromise.current;
-      return;
-    }
-
-    // Check if we need to refresh (avoid unnecessary API calls)
+    // Check if we need to fetch (avoid unnecessary requests)
     const now = Date.now();
-    if (!forceRefresh && (now - claimsState.lastFetchTime) < 5000) {
-      console.log('⏭️ Skipping fetch - too recent');
+    const lastFetch = claimsState.lastFetchTime;
+    const timeSinceLastFetch = lastFetch ? now - lastFetch : Infinity;
+    
+    if (!forceRefresh && timeSinceLastFetch < 30000) { // 30 second cache
+      console.log('📦 Using cached claims data');
       return;
     }
 
-    // Cancel any ongoing fetch
+    // Cancel any pending request
     if (fetchAbortController.current) {
       fetchAbortController.current.abort();
     }
     fetchAbortController.current = new AbortController();
 
-    const fetchPromise = (async () => {
-      try {
-        updateClaimsState(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      updateClaimsState({ loading: true, error: null });
+      
+      console.log('🔍 Fetching claims for:', publicKey.toString());
+      
+      // Choose API endpoint based on force refresh
+      const apiEndpoint = forceRefresh 
+        ? `/api/claims/enhanced?contributor=${publicKey.toString()}&refresh=true`
+        : `/api/claims?contributor=${publicKey.toString()}`;
         
-        console.log('🔍 Fetching claims for:', publicKey.toString());
-        
-        const apiEndpoint = forceRefresh 
-          ? `/api/claims/enhanced?contributor=${publicKey.toString()}&refresh=true`
-          : `/api/claims?contributor=${publicKey.toString()}`;
-        
-        const result = await claimsDebugger.current.fetchClaimsWithDebug(
-          publicKey.toString(), 
-          apiEndpoint
-        );
-        
-        setDebugInfo(result.debugInfo);
-        
-        if (!result.success) {
-          throw new Error(result.error || 'Failed to fetch claims');
-        }
-        
-        console.log('📊 Found claims:', result.claims?.length || 0);
-        
-        // ✅ FIXED: Transform and validate API response
-        const userClaims: ClaimDetails[] = (result.claims || []).map((claim: any) => ({
-          id: claim.id?.toString() || '',
-          takeoverId: claim.takeoverId?.toString() || '',
-          takeoverAddress: claim.takeoverAddress || '',
-          tokenName: claim.tokenName || 'Unknown Token',
-          contributionAmount: claim.contributionAmount || '0',
-          isSuccessful: Boolean(claim.isSuccessful),
-          customRewardRate: Number(claim.customRewardRate) || 1.5,
-          claimableAmount: claim.isSuccessful ? claim.rewardAmount : claim.refundAmount,
-          tokenMint: claim.isSuccessful ? claim.v2TokenMint : claim.v1TokenMint,
-          claimType: claim.isSuccessful ? 'reward' as const : 'refund' as const,
-          vault: claim.vault || '',
-          v1TokenMint: claim.v1TokenMint || '',
-          v2TokenMint: claim.v2TokenMint || '',
-          refundAmount: claim.refundAmount || '0',
-          rewardAmount: claim.rewardAmount || '0',
-          isClaimed: Boolean(claim.isClaimed),
-          transactionSignature: claim.transactionSignature || '',
-          createdAt: claim.createdAt || ''
-        }));
-
-        updateClaimsState(prev => ({
-          ...prev,
-          claims: userClaims,
-          loading: false,
-          error: null,
-          lastFetchTime: now
-        }));
-        
-        // ✅ ENHANCED: Show success notification only for new claimable items
-        const claimableCount = userClaims.filter(c => !c.isClaimed).length;
-        const previousClaimableCount = claimsState.claims.filter(c => !c.isClaimed).length;
-        
-        if (claimableCount > 0 && claimableCount !== previousClaimableCount) {
-          // Use alert instead of toast for better compatibility
-          alert(`🎁 Claims Available! You have ${claimableCount} claim${claimableCount !== 1 ? 's' : ''} ready to process.`);
-        }
-        
-      } catch (error: any) {
-        if (error.name === 'AbortError') {
-          console.log('🚫 Fetch aborted');
-          return;
-        }
-        
-        console.error('❌ Error fetching claims:', error);
-        
-        updateClaimsState(prev => ({
-          ...prev,
-          loading: false,
-          error: error.message
-        }));
-        
-        alert(`Error Loading Claims: ${error.message}`);
+      const result = await claimsDebugger.current.fetchClaimsWithDebug(
+        publicKey.toString(), 
+        apiEndpoint
+      );
+      
+      setDebugInfo(result.debugInfo);
+      
+      if (!result.success) {
+        throw new Error(result.error || 'Failed to fetch claims');
       }
-    })();
+      
+      console.log('📊 Found claims:', result.claims?.length || 0);
+      
+      // ✅ FIXED: Transform and validate API response
+      const userClaims: ClaimDetails[] = (result.claims || []).map((claim: any) => ({
+        id: claim.id?.toString() || '',
+        takeoverId: claim.takeoverId?.toString() || '',
+        takeoverAddress: claim.takeoverAddress || '',
+        tokenName: claim.tokenName || 'Unknown Token',
+        contributionAmount: claim.contributionAmount || '0',
+        isSuccessful: Boolean(claim.isSuccessful),
+        customRewardRate: Number(claim.customRewardRate) || 1.5,
+        claimableAmount: claim.isSuccessful ? claim.rewardAmount : claim.refundAmount,
+        tokenMint: claim.isSuccessful ? claim.v2TokenMint : claim.v1TokenMint,
+        claimType: claim.isSuccessful ? 'reward' as const : 'refund' as const,
+        vault: claim.vault || '',
+        v1TokenMint: claim.v1TokenMint || '',
+        v2TokenMint: claim.v2TokenMint || '',
+        refundAmount: claim.refundAmount || '0',
+        rewardAmount: claim.rewardAmount || '0',
+        isClaimed: Boolean(claim.isClaimed),
+        transactionSignature: claim.transactionSignature || '',
+        createdAt: claim.createdAt || ''
+      }));
 
-    lastFetchPromise.current = fetchPromise;
-    await fetchPromise;
-    lastFetchPromise.current = null;
-  }, [publicKey, claimsState.lastFetchTime, claimsState.claims, updateClaimsState]);
+      // ✅ FIXED: Show success notification only for new claimable items
+      const claimableCount = userClaims.filter((c: ClaimDetails) => !c.isClaimed).length;
+      const previousClaimableCount = claimsState.claims.filter((c: ClaimDetails) => !c.isClaimed).length;
+      
+      updateClaimsState({
+        claims: userClaims,
+        loading: false,
+        error: null,
+        lastFetchTime: now
+      });
 
-  // ✅ ENHANCED: Safe claim processing with proper state management
+      if (claimableCount > 0 && claimableCount !== previousClaimableCount) {
+        toast({
+          title: "🎁 Claims Available!",
+          description: `You have ${claimableCount} claim${claimableCount !== 1 ? 's' : ''} ready to process.`,
+          variant: "default"
+        });
+      }
+      
+    } catch (error: any) {
+      console.error('❌ Error fetching claims:', error);
+      
+      if (error.name === 'AbortError') {
+        console.log('🚫 Claims fetch was cancelled');
+        return;
+      }
+      
+      updateClaimsState({ error: error.message, loading: false });
+      
+      toast({
+        title: "Failed to Load Claims",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  }, [publicKey, claimsState.lastFetchTime, claimsState.claims, toast, updateClaimsState]);
+
+  // Process individual claim
   const processClaim = useCallback(async (claim: ClaimDetails): Promise<void> => {
     if (!publicKey || !signTransaction) {
-      alert("Wallet Not Connected: Please connect your wallet to claim tokens");
+      toast({
+        title: "Wallet Not Connected",
+        description: "Please connect your wallet to claim.",
+        variant: "destructive"
+      });
       return;
     }
 
-    // Prevent duplicate processing
     if (claimsState.processingClaims.has(claim.id)) {
-      console.log('⏭️ Claim already being processed:', claim.id);
+      console.log('⏳ Claim already being processed:', claim.id);
       return;
     }
+
+    addProcessingClaim(claim.id);
 
     try {
-      // Mark claim as processing
-      updateClaimsState(prev => ({
-        ...prev,
-        processingClaims: new Set([...prev.processingClaims, claim.id])
-      }));
+      console.log('🎯 Processing claim:', claim);
       
-      console.log('🎁 Processing claim for:', claim.tokenName);
-      console.log('📍 Claim details:', claim);
+      // Placeholder for actual claim processing logic
+      // This would involve creating and signing the appropriate Solana transaction
       
-      // Create and process claim transaction
-      // [Transaction creation logic would go here]
-      
-      // ✅ ENHANCED: Simulate processing for demo
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      alert(`🎉 Claim Successful! Claimed ${(Number(claim.claimableAmount) / 1_000_000).toLocaleString()} tokens successfully`);
+      toast({
+        title: "Claim Successful! 🎉",
+        description: `Claimed ${(Number(claim.claimableAmount) / 1_000_000).toLocaleString()} tokens successfully`,
+        variant: "default"
+      });
 
-      // ✅ FIXED: Refresh claims with proper debouncing
+      // Refresh claims with proper debouncing
       setTimeout(() => {
         fetchClaims(true);
-      }, 1000); // Shorter, more reasonable delay
+      }, 1000);
 
     } catch (error: any) {
       console.error('❌ Claim processing error:', error);
@@ -355,17 +321,17 @@ export default function ClaimsPage() {
         errorMessage = "Insufficient funds for transaction fees";
       }
       
-      alert(`Claim Failed: ${errorMessage}`);
+      toast({
+        title: "Claim Failed",
+        description: errorMessage,
+        variant: "destructive"
+      });
     } finally {
-      // Remove claim from processing set
-      updateClaimsState(prev => ({
-        ...prev,
-        processingClaims: new Set([...prev.processingClaims].filter(id => id !== claim.id))
-      }));
+      removeProcessingClaim(claim.id);
     }
-  }, [publicKey, signTransaction, claimsState.processingClaims, updateClaimsState, fetchClaims]);
+  }, [publicKey, signTransaction, claimsState.processingClaims, fetchClaims, toast, addProcessingClaim, removeProcessingClaim]);
 
-  // ✅ ENHANCED: System health testing
+  // System health testing
   const testSystemHealth = useCallback(async (): Promise<void> => {
     try {
       const health = await claimsDebugger.current.testApiHealth();
@@ -379,7 +345,7 @@ export default function ClaimsPage() {
         variant: "destructive"
       });
     }
-  }, []);
+  }, [toast]);
 
   // ✅ FIXED: Effect with proper cleanup
   useEffect(() => {
@@ -391,26 +357,17 @@ export default function ClaimsPage() {
         fetchAbortController.current.abort();
       }
     };
-  }, [publicKey]); // Only depend on publicKey
+  }, [fetchClaims]);
 
-  // ✅ ENHANCED: Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (fetchAbortController.current) {
-        fetchAbortController.current.abort();
-      }
-    };
-  }, []);
-
-  // Don't render if wallet not connected
+  // Wallet not connected
   if (!publicKey) {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <Card>
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">Connect Your Wallet</h2>
-            <p className="text-gray-600 mb-4">
-              Please connect your wallet to view and claim your tokens
+            <p className="text-gray-600 mb-6">
+              Please connect your wallet to view your claims.
             </p>
             <WalletMultiButton />
           </CardContent>
@@ -419,29 +376,46 @@ export default function ClaimsPage() {
     );
   }
 
-  if (claimsState.loading) {
+  // Loading state
+  if (claimsState.loading && claimsState.claims.length === 0) {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <Card>
           <CardContent className="pt-6 text-center">
             <LoadingSpinner />
-            <p className="text-sm text-gray-500 mt-2">Loading your claims...</p>
+            <p className="mt-4 text-gray-600">Loading your claims...</p>
           </CardContent>
         </Card>
       </div>
     );
   }
 
-  if (claimsState.error) {
+  // Error state
+  if (claimsState.error && claimsState.claims.length === 0) {
     return (
-      <div className="max-w-4xl mx-auto p-6 space-y-4">
-        <Card>
-          <CardContent className="pt-6 text-center">
-            <h2 className="text-xl font-semibold mb-4 text-red-600">Error Loading Claims</h2>
-            <p className="text-gray-600 mb-4">{claimsState.error}</p>
-            <div className="flex gap-2 justify-center">
-              <Button onClick={() => fetchClaims(true)}>Retry</Button>
-              <Button variant="outline" onClick={testSystemHealth}>Run Diagnostics</Button>
+      <div className="max-w-4xl mx-auto p-6">
+        <Card className="border-red-200">
+          <CardContent className="pt-6">
+            <div className="text-center">
+              <h2 className="text-xl font-semibold text-red-800 mb-4">
+                Error Loading Claims
+              </h2>
+              <p className="text-red-600 mb-4">{claimsState.error}</p>
+              <div className="space-x-2">
+                <Button 
+                  variant="outline" 
+                  onClick={() => fetchClaims(true)}
+                >
+                  Retry
+                </Button>
+                <Button 
+                  variant="ghost" 
+                  size="sm"
+                  onClick={testSystemHealth}
+                >
+                  Test System Health
+                </Button>
+              </div>
             </div>
           </CardContent>
         </Card>
@@ -525,63 +499,112 @@ export default function ClaimsPage() {
           onClick={() => fetchClaims(true)}
           disabled={claimsState.loading}
         >
-          {claimsState.loading ? "Refreshing..." : "Refresh"}
+          {claimsState.loading ? <LoadingSpinner className="w-4 h-4" /> : 'Refresh'}
         </Button>
       </div>
 
-      <div className="space-y-4">
-        {claimsState.claims.map((claim) => {
-          const isProcessing = claimsState.processingClaims.has(claim.id);
-          const claimableTokens = Number(claim.claimableAmount) / 1_000_000;
-          
-          return (
-            <Card key={claim.id} className={claim.isClaimed ? "opacity-60" : ""}>
-              <CardHeader>
-                <CardTitle className="flex items-center justify-between">
-                  <span>{claim.tokenName}</span>
-                  <span className={`text-sm px-2 py-1 rounded ${
-                    claim.isClaimed 
-                      ? "bg-gray-100 text-gray-600" 
-                      : claim.isSuccessful
-                        ? "bg-green-100 text-green-800"
-                        : "bg-yellow-100 text-yellow-800"
-                  }`}>
-                    {claim.isClaimed ? "Claimed" : claim.claimType}
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                  <div>
-                    <span className="font-medium">Claimable Amount:</span><br />
-                    {claimableTokens.toLocaleString()} tokens
+      <div className="grid gap-4">
+        {claimsState.claims.map((claim: ClaimDetails) => (
+          <Card key={claim.id} className="relative">
+            <CardHeader>
+              <div className="flex justify-between items-start">
+                <div>
+                  <CardTitle className="flex items-center gap-2">
+                    {claim.tokenName}
+                    <span className={`px-2 py-1 rounded text-xs font-medium ${
+                      claim.claimType === 'reward' 
+                        ? 'bg-green-100 text-green-800' 
+                        : 'bg-blue-100 text-blue-800'
+                    }`}>
+                      {claim.claimType === 'reward' ? '🎁 Reward' : '💰 Refund'}
+                    </span>
+                    {claim.isClaimed && (
+                      <span className="px-2 py-1 rounded text-xs font-medium bg-gray-100 text-gray-600">
+                        ✅ Claimed
+                      </span>
+                    )}
+                  </CardTitle>
+                  <CardDescription>
+                    Contributed: {(Number(claim.contributionAmount) / 1_000_000).toLocaleString()} tokens
+                  </CardDescription>
+                </div>
+                <div className="text-right">
+                  <div className="text-lg font-semibold">
+                    {(Number(claim.claimableAmount) / 1_000_000).toLocaleString()} tokens
                   </div>
-                  <div>
-                    <span className="font-medium">Type:</span><br />
-                    {claim.isSuccessful ? "🎉 Reward Tokens" : "💰 Refund"}
+                  <div className="text-sm text-gray-500">
+                    {claim.claimType === 'reward' ? 
+                      `${claim.customRewardRate}x reward rate` : 
+                      'Full refund'
+                    }
                   </div>
                 </div>
-                
-                {!claim.isClaimed && (
-                  <Button 
-                    onClick={() => processClaim(claim)}
-                    disabled={isProcessing}
-                    className="w-full"
-                  >
-                    {isProcessing ? "Processing..." : "Claim Tokens"}
-                  </Button>
-                )}
-                
-                {claim.isClaimed && (
-                  <p className="text-sm text-gray-500">
-                    ✅ Claimed on {new Date(claim.createdAt).toLocaleDateString()}
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="flex justify-between items-center">
+                <div className="space-y-1">
+                  <p className="text-sm text-gray-600">
+                    Takeover: {claim.takeoverAddress.slice(0, 8)}...{claim.takeoverAddress.slice(-4)}
                   </p>
-                )}
-              </CardContent>
-            </Card>
-          );
-        })}
+                  {claim.transactionSignature && (
+                    <p className="text-xs text-gray-500">
+                      Claimed: {claim.transactionSignature.slice(0, 8)}...{claim.transactionSignature.slice(-4)}
+                    </p>
+                  )}
+                </div>
+                <div className="flex gap-2">
+                  <Link href={`/takeover/${claim.takeoverAddress}`}>
+                    <Button variant="outline" size="sm">
+                      View Details
+                    </Button>
+                  </Link>
+                  {!claim.isClaimed && (
+                    <Button 
+                      onClick={() => processClaim(claim)}
+                      disabled={claimsState.processingClaims.has(claim.id)}
+                      className="min-w-[80px]"
+                    >
+                      {claimsState.processingClaims.has(claim.id) ? (
+                        <LoadingSpinner className="w-4 h-4" />
+                      ) : (
+                        'Claim'
+                      )}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
       </div>
+
+      {/* Debug toggle */}
+      {process.env.NODE_ENV === 'development' && (
+        <div className="text-center">
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => setShowDebug(!showDebug)}
+          >
+            {showDebug ? 'Hide' : 'Show'} Debug Info
+          </Button>
+        </div>
+      )}
+
+      {/* Debug Information */}
+      {showDebug && debugInfo && (
+        <Card className="border-yellow-200 bg-yellow-50">
+          <CardHeader>
+            <CardTitle className="text-yellow-800">🔧 Debug Information</CardTitle>
+          </CardHeader>
+          <CardContent className="text-yellow-800">
+            <pre className="text-xs bg-yellow-100 p-2 rounded overflow-auto">
+              {JSON.stringify(debugInfo, null, 2)}
+            </pre>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
