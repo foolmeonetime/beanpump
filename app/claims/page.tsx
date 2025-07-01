@@ -100,9 +100,29 @@ class ClaimsDebugger {
         throw new Error(`HTTP ${response.status}: ${data.error || 'Unknown error'}`);
       }
 
+      // ✅ ENHANCED: Better extraction logic with detailed logging
+      console.log('🔍 ClaimsDebugger: Raw API response:', data);
+      console.log('🔍 ClaimsDebugger: data.success:', data.success);
+      console.log('🔍 ClaimsDebugger: data.data:', data.data);
+      console.log('🔍 ClaimsDebugger: data.data?.claims:', data.data?.claims);
+      console.log('🔍 ClaimsDebugger: data.claims:', data.claims);
+
+      let extractedClaims: any[] = [];
+      
+      if (data.data && Array.isArray(data.data.claims)) {
+        extractedClaims = data.data.claims;
+        console.log('🔍 ClaimsDebugger: Using data.data.claims, length:', extractedClaims.length);
+      } else if (Array.isArray(data.claims)) {
+        extractedClaims = data.claims;
+        console.log('🔍 ClaimsDebugger: Using data.claims, length:', extractedClaims.length);
+      } else {
+        console.warn('⚠️ ClaimsDebugger: No valid claims found in response');
+        extractedClaims = [];
+      }
+
       return {
         success: data.success,
-        claims: data.data?.claims || data.claims || [], // ✅ Handle both possible structures
+        claims: extractedClaims,
         error: data.error,
         debugInfo
       };
@@ -255,25 +275,13 @@ export default function ClaimsPage() {
         throw new Error(result.error || 'Failed to fetch claims');
       }
       
-      // ✅ ENHANCED: Better API response validation
-      console.log('📊 Raw API response:', result);
+      // ✅ SIMPLIFIED: The ClaimsDebugger already extracts claims properly
       console.log('📊 Claims from debugger:', result.claims);
       console.log('📊 Claims type:', typeof result.claims);
       console.log('📊 Is array:', Array.isArray(result.claims));
       
-      // ✅ DEFENSIVE: The ClaimsDebugger already extracts claims for us
-      let claimsData: any[] = [];
-      
-      if (Array.isArray(result.claims)) {
-        claimsData = result.claims;
-        console.log('📊 Using result.claims:', claimsData.length);
-      } else if (result.claims === null || result.claims === undefined) {
-        console.log('📊 No claims data found - this is normal for users with no claims');
-        claimsData = [];
-      } else {
-        console.warn('⚠️ Unexpected claims data type:', typeof result.claims, result.claims);
-        claimsData = [];
-      }
+      // ✅ Use the claims directly from the debugger (it already handles the extraction)
+      let claimsData: any[] = result.claims || [];
       
       console.log('📊 Processing claims count:', claimsData.length);
       
@@ -536,7 +544,7 @@ export default function ClaimsPage() {
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don&apos;t have any claims available at this time.
+              You don't have any claims available at this time.
             </p>
             <p className="text-sm text-gray-500">
               Claims become available after takeovers are finalized.
