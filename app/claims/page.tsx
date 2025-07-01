@@ -503,7 +503,7 @@ export default function ClaimsPage() {
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don't have any claims available at this time.
+              You don&apos;t have any claims available at this time.
             </p>
             <p className="text-sm text-gray-500">
               Claims become available after takeovers are finalized.

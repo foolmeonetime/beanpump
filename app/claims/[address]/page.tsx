@@ -272,7 +272,7 @@ export default function ClaimPage() {
           <CardContent className="pt-6 text-center">
             <h2 className="text-xl font-semibold mb-4">No Claims Found</h2>
             <p className="text-gray-600 mb-4">
-              You don't have any claims for this takeover.
+              You don&apos;t have any claims for this takeover.
             </p>
             <div className="space-y-2">
               <Button 
