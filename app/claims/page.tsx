@@ -44,6 +44,22 @@ interface ClaimsState {
   processingClaims: Set<string>;
 }
 
+// ✅ ADDED: Type for debugger response
+interface ClaimsDebuggerResponse {
+  success: boolean;
+  claims: any[];
+  error?: string;
+  debugInfo: any;
+}
+
+// ✅ ADDED: Type for API health response
+interface ApiHealthResponse {
+  status: string | number;
+  data?: any;
+  error?: string;
+  timestamp: string;
+}
+
 // ✅ FIXED: Simplified state management without useReducer
 const initialClaimsState: ClaimsState = {
   claims: [],
@@ -55,7 +71,7 @@ const initialClaimsState: ClaimsState = {
 
 // Debug helpers
 class ClaimsDebugger {
-  async fetchClaimsWithDebug(contributor: string, endpoint: string) {
+  async fetchClaimsWithDebug(contributor: string, endpoint: string): Promise<ClaimsDebuggerResponse> {
     const startTime = Date.now();
     const debugInfo: any = {
       timestamp: new Date().toISOString(),
@@ -86,7 +102,7 @@ class ClaimsDebugger {
 
       return {
         success: data.success,
-        claims: data.claims,
+        claims: data.data?.claims || data.claims || [], // ✅ Handle both possible structures
         error: data.error,
         debugInfo
       };
@@ -97,14 +113,14 @@ class ClaimsDebugger {
       
       return {
         success: false,
-        claims: [],
+        claims: [], // ✅ Always return empty array instead of undefined
         error: error.message,
         debugInfo
       };
     }
   }
 
-  async testApiHealth() {
+  async testApiHealth(): Promise<ApiHealthResponse> {
     try {
       const response = await fetch('/api/health', {
         cache: 'no-store'
@@ -145,7 +161,7 @@ export default function ClaimsPage() {
   const [claimsState, setClaimsState] = useState<ClaimsState>(initialClaimsState);
   const [showDebug, setShowDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState<any>(null);
-  const [apiHealth, setApiHealth] = useState<any>(null);
+  const [apiHealth, setApiHealth] = useState<ApiHealthResponse | null>(null);
 
   // Refs for cleanup and caching
   const fetchAbortController = useRef<AbortController | null>(null);
@@ -214,10 +230,30 @@ export default function ClaimsPage() {
         throw new Error(result.error || 'Failed to fetch claims');
       }
       
-      console.log('📊 Found claims:', result.claims?.length || 0);
+      // ✅ ENHANCED: Better API response validation
+      console.log('📊 Raw API response:', result);
+      console.log('📊 Claims from debugger:', result.claims);
+      console.log('📊 Claims type:', typeof result.claims);
+      console.log('📊 Is array:', Array.isArray(result.claims));
       
-      // ✅ FIXED: Transform and validate API response
-      const userClaims: ClaimDetails[] = (result.claims || []).map((claim: any) => ({
+      // ✅ DEFENSIVE: The ClaimsDebugger already extracts claims for us
+      let claimsData: any[] = [];
+      
+      if (Array.isArray(result.claims)) {
+        claimsData = result.claims;
+        console.log('📊 Using result.claims:', claimsData.length);
+      } else if (result.claims === null || result.claims === undefined) {
+        console.log('📊 No claims data found - this is normal for users with no claims');
+        claimsData = [];
+      } else {
+        console.warn('⚠️ Unexpected claims data type:', typeof result.claims, result.claims);
+        claimsData = [];
+      }
+      
+      console.log('📊 Processing claims count:', claimsData.length);
+      
+      // ✅ FIXED: Transform and validate API response with proper null checks
+      const userClaims: ClaimDetails[] = claimsData.map((claim: any) => ({
         id: claim.id?.toString() || '',
         takeoverId: claim.takeoverId?.toString() || '',
         takeoverAddress: claim.takeoverAddress || '',
@@ -238,9 +274,9 @@ export default function ClaimsPage() {
         createdAt: claim.createdAt || ''
       }));
 
-      // ✅ FIXED: Show success notification only for new claimable items
-      const claimableCount = userClaims.filter((c: ClaimDetails) => !c.isClaimed).length;
-      const previousClaimableCount = claimsState.claims.filter((c: ClaimDetails) => !c.isClaimed).length;
+      // ✅ ENHANCED: Defensive counting with proper null checks
+      const claimableCount = userClaims?.filter((c: ClaimDetails) => !c.isClaimed)?.length || 0;
+      const previousClaimableCount = claimsState.claims?.filter((c: ClaimDetails) => !c.isClaimed)?.length || 0;
       
       updateClaimsState({
         claims: userClaims,
@@ -334,7 +370,7 @@ export default function ClaimsPage() {
   // System health testing
   const testSystemHealth = useCallback(async (): Promise<void> => {
     try {
-      const health = await claimsDebugger.current.testApiHealth();
+      const health: ApiHealthResponse = await claimsDebugger.current.testApiHealth();
       setApiHealth(health);
       setShowDebug(true);
     } catch (error: any) {

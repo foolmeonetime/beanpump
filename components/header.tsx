@@ -1,4 +1,3 @@
-// components/header.tsx - Fixed navigation structure
 "use client";
 import { useState, useEffect } from "react";
 import { MoonIcon, SunIcon } from "lucide-react";
@@ -18,7 +17,7 @@ export function Header() {
     setMounted(true);
   }, []);
 
-  // Fetch user's claim count for notification badge
+  // ✅ FIXED: Fetch user's claim count with proper error handling
   useEffect(() => {
     const fetchClaimCount = async () => {
       if (!publicKey) {
@@ -27,16 +26,53 @@ export function Header() {
       }
 
       try {
-        const response = await fetch(`/api/claims?contributor=${publicKey.toString()}`);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success) {
-            const unclaimedCount = data.claims.filter((claim: any) => !claim.isClaimed).length;
-            setClaimCount(unclaimedCount);
-          }
+        console.log('🔍 Header: Fetching claim count for:', publicKey.toString());
+        
+        const response = await fetch(`/api/claims?contributor=${publicKey.toString()}`, {
+          cache: 'no-store'
+        });
+        
+        if (!response.ok) {
+          console.warn('❌ Header: Failed to fetch claims:', response.status);
+          return;
         }
-      } catch (error) {
-        console.error('Failed to fetch claim count:', error);
+        
+        const data = await response.json();
+        console.log('📊 Header: Received data:', data);
+        
+        if (!data.success) {
+          console.warn('❌ Header: API returned error:', data.error);
+          return;
+        }
+        
+        // ✅ DEFENSIVE: Handle different possible API response structures
+        let claimsArray: any[] = [];
+        
+        if (Array.isArray(data.claims)) {
+          claimsArray = data.claims;
+        } else if (data.data && Array.isArray(data.data.claims)) {
+          claimsArray = data.data.claims;
+        } else if (data.data && Array.isArray(data.data)) {
+          claimsArray = data.data;
+        } else {
+          console.warn('⚠️ Header: Unexpected API response structure:', data);
+          claimsArray = [];
+        }
+        
+        console.log('📊 Header: Processing claims array:', claimsArray.length);
+        
+        // ✅ FIXED: Safe filtering with proper null checks
+        const unclaimedCount = claimsArray.filter((claim: any) => {
+          return claim && !claim.isClaimed;
+        }).length;
+        
+        console.log('📊 Header: Unclaimed count:', unclaimedCount);
+        setClaimCount(unclaimedCount);
+        
+      } catch (error: any) {
+        console.error('❌ Header: Failed to fetch claim count:', error);
+        // Don't throw the error, just log it and continue
+        setClaimCount(0);
       }
     };
 
@@ -58,96 +94,44 @@ export function Header() {
         </Link>
 
         <div className="flex items-center space-x-4">
-          {/* Navigation Links */}
-          <nav className="hidden md:flex items-center space-x-4">
-            <Link href="/" className="text-sm hover:text-purple-600 transition-colors">
-              Home
+          <nav className="hidden md:flex items-center space-x-6">
+            <Link href="/takeover" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors">
+              Takeovers
             </Link>
-            <Link href="/create" className="text-sm hover:text-purple-600 transition-colors">
+            <Link href="/create" className="text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors">
               Create
             </Link>
-            <Link href="/mint" className="text-sm hover:text-purple-600 transition-colors">
-              Mint Tokens
-            </Link>
-            <Link href="/pools" className="text-sm hover:text-purple-600 transition-colors">
-              Pool Simulator
-            </Link>
-            {publicKey && (
-              <Link href="/claims" className="relative text-sm hover:text-purple-600 transition-colors">
-                Claims
-                {claimCount > 0 && (
-                  <span className="absolute -top-2 -right-2 bg-green-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center animate-pulse">
-                    {claimCount > 9 ? '9+' : claimCount}
-                  </span>
-                )}
-              </Link>
-            )}
-          </nav>
-
-          {/* Mobile Navigation Dropdown */}
-          <div className="md:hidden">
-            <select 
-              onChange={(e) => window.location.href = e.target.value}
-              className="text-sm bg-transparent border border-gray-300 rounded px-2 py-1"
-              defaultValue=""
-            >
-              <option value="">Menu</option>
-              <option value="/">Home</option>
-              <option value="/create">Create</option>
-              <option value="/mint">Mint Tokens</option>
-              <option value="/pools">Pool Simulator</option>
-              {publicKey && (
-                <option value="/claims">
-                  Claims {claimCount > 0 ? `(${claimCount})` : ''}
-                </option>
-              )}
-            </select>
-          </div>
-
-          {/* Wallet Connection */}
-          <WalletMultiButton />
-          
-          {/* Theme Toggle */}
-          {mounted && (
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-              aria-label="Toggle theme"
-            >
-              {theme === "dark" ? <SunIcon className="h-5 w-5" /> : <MoonIcon className="h-5 w-5" />}
-            </Button>
-          )}
-        </div>
-      </div>
-
-      {/* Mobile Navigation Links (when logged in) */}
-      {publicKey && (
-        <div className="md:hidden border-t border-gray-200 dark:border-gray-800 px-4 py-2">
-          <div className="flex space-x-4 text-sm">
-            <Link href="/" className="hover:text-purple-600 transition-colors">
-              Home
-            </Link>
-            <Link href="/create" className="hover:text-purple-600 transition-colors">
-              Create
-            </Link>
-            <Link href="/mint" className="hover:text-purple-600 transition-colors">
-              Mint
-            </Link>
-            <Link href="/pools" className="hover:text-purple-600 transition-colors">
-              Pools
-            </Link>
-            <Link href="/claims" className="relative hover:text-purple-600 transition-colors">
+            
+            {/* ✅ ENHANCED: Claims link with notification badge */}
+            <Link href="/claims" className="relative text-gray-600 hover:text-gray-900 dark:text-gray-300 dark:hover:text-white transition-colors">
               Claims
               {claimCount > 0 && (
-                <span className="ml-1 bg-green-500 text-white text-xs rounded-full px-1">
-                  {claimCount}
+                <span className="absolute -top-2 -right-2 bg-red-500 text-white text-xs rounded-full h-5 w-5 flex items-center justify-center">
+                  {claimCount > 9 ? '9+' : claimCount}
                 </span>
               )}
             </Link>
-          </div>
+          </nav>
+
+          {/* Theme toggle */}
+          {mounted && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setTheme(theme === "light" ? "dark" : "light")}
+            >
+              {theme === "light" ? (
+                <MoonIcon className="h-4 w-4" />
+              ) : (
+                <SunIcon className="h-4 w-4" />
+              )}
+            </Button>
+          )}
+
+          {/* Wallet connection */}
+          <WalletMultiButton />
         </div>
-      )}
+      </div>
     </header>
   );
 }
