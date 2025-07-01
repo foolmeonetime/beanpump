@@ -62,7 +62,7 @@ interface ApiHealthResponse {
 
 // ✅ FIXED: Simplified state management without useReducer
 const initialClaimsState: ClaimsState = {
-  claims: [],
+  claims: [], // ✅ Always start with empty array, never undefined
   loading: false,
   error: null,
   lastFetchTime: null,
@@ -157,8 +157,20 @@ export default function ClaimsPage() {
   const { connection } = useConnection();
   const { toast } = useToast();
 
+  console.log('🏁 ClaimsPage render:', { 
+    publicKey: publicKey?.toString(), 
+    hasSignTransaction: !!signTransaction 
+  });
+
   // ✅ FIXED: Use useState instead of useReducer for simpler state management
   const [claimsState, setClaimsState] = useState<ClaimsState>(initialClaimsState);
+  
+  console.log('📊 Current claims state:', { 
+    claimsLength: claimsState.claims?.length || 0,
+    loading: claimsState.loading,
+    error: claimsState.error,
+    claimsIsArray: Array.isArray(claimsState.claims)
+  });
   const [showDebug, setShowDebug] = useState(false);
   const [debugInfo, setDebugInfo] = useState<any>(null);
   const [apiHealth, setApiHealth] = useState<ApiHealthResponse | null>(null);
@@ -167,9 +179,22 @@ export default function ClaimsPage() {
   const fetchAbortController = useRef<AbortController | null>(null);
   const claimsDebugger = useRef(new ClaimsDebugger());
 
-  // ✅ FIXED: Helper functions to update state
+  // ✅ FIXED: Helper functions to update state safely
   const updateClaimsState = useCallback((updates: Partial<ClaimsState>) => {
-    setClaimsState(prev => ({ ...prev, ...updates }));
+    setClaimsState(prev => {
+      const newState = { 
+        ...prev, 
+        ...updates,
+        // ✅ CRITICAL: Never allow claims to be undefined
+        claims: updates.claims !== undefined ? (Array.isArray(updates.claims) ? updates.claims : []) : prev.claims
+      };
+      console.log('🔄 Updating claims state:', { 
+        oldClaimsLength: prev.claims?.length || 0, 
+        newClaimsLength: newState.claims?.length || 0,
+        updates 
+      });
+      return newState;
+    });
   }, []);
 
   const addProcessingClaim = useCallback((claimId: string) => {
@@ -274,12 +299,15 @@ export default function ClaimsPage() {
         createdAt: claim.createdAt || ''
       }));
 
-      // ✅ ENHANCED: Defensive counting with proper null checks
-      const claimableCount = userClaims?.filter((c: ClaimDetails) => !c.isClaimed)?.length || 0;
-      const previousClaimableCount = claimsState.claims?.filter((c: ClaimDetails) => !c.isClaimed)?.length || 0;
+      // ✅ ENHANCED: Defensive counting with bulletproof null checks
+      const safeUserClaims = Array.isArray(userClaims) ? userClaims : [];
+      const safePreviousClaims = Array.isArray(claimsState.claims) ? claimsState.claims : [];
+      
+      const claimableCount = safeUserClaims.filter((c: ClaimDetails) => c && !c.isClaimed).length || 0;
+      const previousClaimableCount = safePreviousClaims.filter((c: ClaimDetails) => c && !c.isClaimed).length || 0;
       
       updateClaimsState({
-        claims: userClaims,
+        claims: Array.isArray(userClaims) ? userClaims : [],
         loading: false,
         error: null,
         lastFetchTime: now
@@ -383,9 +411,14 @@ export default function ClaimsPage() {
     }
   }, [toast]);
 
-  // ✅ FIXED: Effect with proper cleanup
+  // ✅ ENHANCED: Effect with proper cleanup and error handling
   useEffect(() => {
-    fetchClaims();
+    console.log('🎯 useEffect triggered, calling fetchClaims');
+    try {
+      fetchClaims();
+    } catch (error) {
+      console.error('❌ Error in useEffect fetchClaims:', error);
+    }
     
     // Cleanup function
     return () => {
@@ -496,7 +529,7 @@ export default function ClaimsPage() {
     );
   }
 
-  if (claimsState.claims.length === 0) {
+  if (!Array.isArray(claimsState.claims) || claimsState.claims.length === 0) {
     return (
       <div className="max-w-4xl mx-auto p-6">
         <Card>
@@ -521,26 +554,28 @@ export default function ClaimsPage() {
     );
   }
 
-  return (
-    <div className="max-w-4xl mx-auto p-6 space-y-6">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold">Your Claims</h1>
-          <p className="text-gray-600">
-            {claimsState.claims.length} claim{claimsState.claims.length !== 1 ? 's' : ''} found
-          </p>
+  // ✅ DEFENSIVE: Wrap entire render in try-catch to catch mapping errors
+  try {
+    return (
+      <div className="max-w-4xl mx-auto p-6 space-y-6">
+        <div className="flex justify-between items-center">
+          <div>
+            <h1 className="text-3xl font-bold">Your Claims</h1>
+            <p className="text-gray-600">
+              {Array.isArray(claimsState.claims) ? claimsState.claims.length : 0} claim{(claimsState.claims?.length || 0) !== 1 ? 's' : ''} found
+            </p>
+          </div>
+          <Button 
+            variant="outline" 
+            onClick={() => fetchClaims(true)}
+            disabled={claimsState.loading}
+          >
+            {claimsState.loading ? <LoadingSpinner className="w-4 h-4" /> : 'Refresh'}
+          </Button>
         </div>
-        <Button 
-          variant="outline" 
-          onClick={() => fetchClaims(true)}
-          disabled={claimsState.loading}
-        >
-          {claimsState.loading ? <LoadingSpinner className="w-4 h-4" /> : 'Refresh'}
-        </Button>
-      </div>
 
-      <div className="grid gap-4">
-        {claimsState.claims.map((claim: ClaimDetails) => (
+        <div className="grid gap-4">
+          {Array.isArray(claimsState.claims) && claimsState.claims.map((claim: ClaimDetails) => (
           <Card key={claim.id} className="relative">
             <CardHeader>
               <div className="flex justify-between items-start">
@@ -617,13 +652,28 @@ export default function ClaimsPage() {
 
       {/* Debug toggle */}
       {process.env.NODE_ENV === 'development' && (
-        <div className="text-center">
+        <div className="text-center space-y-2">
           <Button 
             variant="ghost" 
             size="sm" 
             onClick={() => setShowDebug(!showDebug)}
           >
             {showDebug ? 'Hide' : 'Show'} Debug Info
+          </Button>
+          <Button 
+            variant="ghost" 
+            size="sm" 
+            onClick={() => {
+              console.log('🔍 Debug State Dump:', {
+                claimsState,
+                claimsIsArray: Array.isArray(claimsState.claims),
+                claimsLength: claimsState.claims?.length,
+                claimsType: typeof claimsState.claims,
+                firstClaim: claimsState.claims?.[0]
+              });
+            }}
+          >
+            Dump State to Console
           </Button>
         </div>
       )}
@@ -643,4 +693,46 @@ export default function ClaimsPage() {
       )}
     </div>
   );
+  } catch (renderError: any) {
+    console.error('❌ CRITICAL: Render error in ClaimsPage:', renderError);
+    
+    return (
+      <div className="max-w-4xl mx-auto p-6">
+        <Card className="border-red-200">
+          <CardContent className="pt-6 text-center">
+            <h2 className="text-xl font-semibold text-red-800 mb-4">
+              Render Error
+            </h2>
+            <p className="text-red-600 mb-4">
+              A critical error occurred while rendering the claims page.
+            </p>
+            <pre className="text-xs bg-red-50 p-2 rounded mb-4 text-left">
+              {renderError.message}
+            </pre>
+            <div className="space-x-2">
+              <Button 
+                variant="outline" 
+                onClick={() => window.location.reload()}
+              >
+                Reload Page
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm"
+                onClick={() => {
+                  console.log('🔍 Error Debug State:', {
+                    claimsState,
+                    error: renderError,
+                    publicKey: publicKey?.toString()
+                  });
+                }}
+              >
+                Log Debug Info
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 }
