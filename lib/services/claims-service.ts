@@ -10,81 +10,106 @@ export interface ClaimFilters {
 
 export class ClaimsService {
   static async getUserClaims(db: PoolClient, filters: ClaimFilters) {
-    let query = `
-      SELECT 
-        c.id,
-        c.takeover_id,
-        c.amount as contribution_amount,
-        c.contributor,
-        c.transaction_signature,
-        c.created_at,
-        c.is_claimed,
-        c.claim_signature,
-        c.claim_amount,
-        c.claim_type,
-        c.claimed_at,
-        t.address as takeover_address,
-        t.token_name,
-        t.is_successful,
-        t.custom_reward_rate,
-        t.v1_token_mint,
-        t.v2_token_mint,
-        t.vault,
-        t.is_finalized
-      FROM contributions c
-      JOIN takeovers t ON c.takeover_id = t.id
-      WHERE c.contributor = $1
-        AND t.is_finalized = true
-    `;
+    try {
+      let query = `
+        SELECT 
+          c.id,
+          c.takeover_id,
+          c.amount as contribution_amount,
+          c.contributor,
+          c.transaction_signature,
+          c.created_at,
+          c.is_claimed,
+          c.claim_signature,
+          c.claim_amount,
+          c.claim_type,
+          c.claimed_at,
+          t.address as takeover_address,
+          t.token_name,
+          t.is_successful,
+          t.custom_reward_rate,
+          t.v1_token_mint,
+          t.v2_token_mint,
+          t.vault,
+          t.is_finalized,
+          t.end_time
+        FROM contributions c
+        JOIN takeovers t ON c.takeover_id = t.id
+        WHERE c.contributor = $1
+          AND t.is_finalized = true
+      `;
 
-    const params: any[] = [filters.contributor];
+      const params: any[] = [filters.contributor];
 
-    if (filters.takeoverId) {
-      query += ` AND c.takeover_id = $${params.length + 1}`;
-      params.push(filters.takeoverId);
+      if (filters.takeoverId) {
+        query += ` AND c.takeover_id = $${params.length + 1}`;
+        params.push(filters.takeoverId);
+      }
+
+      if (filters.takeoverAddress) {
+        query += ` AND t.address = $${params.length + 1}`;
+        params.push(filters.takeoverAddress);
+      }
+
+      if (filters.status && filters.status !== 'all') {
+        const isClaimed = filters.status === 'claimed';
+        query += ` AND COALESCE(c.is_claimed, false) = $${params.length + 1}`;
+        params.push(isClaimed);
+      }
+
+      query += ` ORDER BY c.created_at DESC`;
+
+      const result = await db.query(query, params);
+      
+      // FIXED: Always return an array, even if result is empty
+      if (!result || !result.rows) {
+        return [];
+      }
+
+      return result.rows.map(row => {
+        // Calculate if claim is available
+        const tokenMint = row.is_successful ? row.v2_token_mint : row.v1_token_mint;
+        const isClaimAvailable = row.is_finalized && 
+                                !row.is_claimed && 
+                                tokenMint && 
+                                row.vault;
+
+        return {
+          id: row.id,
+          takeoverId: row.takeover_id,
+          takeoverAddress: row.takeover_address,
+          tokenName: row.token_name,
+          contributionAmount: row.contribution_amount,
+          isSuccessful: row.is_successful,
+          isFinalized: row.is_finalized, // ✅ ADDED: Missing property
+          customRewardRate: row.custom_reward_rate,
+          claimableAmount: ClaimsService.calculateClaimableAmount(row),
+          tokenMint: tokenMint,
+          claimType: row.is_successful ? 'reward' : 'refund',
+          vault: row.vault,
+          v1TokenMint: row.v1_token_mint,
+          v2TokenMint: row.v2_token_mint,
+          isClaimed: row.is_claimed || false,
+          isClaimable: isClaimAvailable, // ✅ ADDED: Missing property
+          transactionSignature: row.transaction_signature,
+          createdAt: row.created_at,
+          claimSignature: row.claim_signature,
+          claimedAt: row.claimed_at,
+          // Calculate amounts
+          refundAmount: row.is_successful ? '0' : row.contribution_amount.toString(),
+          rewardAmount: row.is_successful 
+            ? ClaimsService.calculateRewardAmount(row.contribution_amount, row.custom_reward_rate)
+            : '0',
+          // ✅ ADDED: Status calculation
+          status: ClaimsService.getClaimStatus(row, isClaimAvailable)
+        };
+      });
+
+    } catch (error: any) {
+      console.error('ClaimsService.getUserClaims error:', error);
+      // CRITICAL: Return empty array on error, never undefined/null
+      return [];
     }
-
-    if (filters.takeoverAddress) {
-      query += ` AND t.address = $${params.length + 1}`;
-      params.push(filters.takeoverAddress);
-    }
-
-    if (filters.status && filters.status !== 'all') {
-      const isClaimed = filters.status === 'claimed';
-      query += ` AND COALESCE(c.is_claimed, false) = $${params.length + 1}`;
-      params.push(isClaimed);
-    }
-
-    query += ` ORDER BY c.created_at DESC`;
-
-    const result = await db.query(query, params);
-    
-    return result.rows.map(row => ({
-      id: row.id,
-      takeoverId: row.takeover_id,
-      takeoverAddress: row.takeover_address,
-      tokenName: row.token_name,
-      contributionAmount: row.contribution_amount,
-      isSuccessful: row.is_successful,
-      customRewardRate: row.custom_reward_rate,
-      // ✅ FIXED: Use correct static method syntax
-      claimableAmount: ClaimsService.calculateClaimableAmount(row),
-      tokenMint: row.is_successful ? row.v2_token_mint : row.v1_token_mint,
-      claimType: row.is_successful ? 'reward' : 'refund',
-      vault: row.vault,
-      v1TokenMint: row.v1_token_mint,
-      v2TokenMint: row.v2_token_mint,
-      isClaimed: row.is_claimed || false,
-      transactionSignature: row.transaction_signature,
-      createdAt: row.created_at,
-      claimSignature: row.claim_signature,
-      claimedAt: row.claimed_at,
-      // Calculate amounts - ✅ FIXED: Use correct static method syntax
-      refundAmount: row.is_successful ? '0' : row.contribution_amount.toString(),
-      rewardAmount: row.is_successful 
-        ? ClaimsService.calculateRewardAmount(row.contribution_amount, row.custom_reward_rate)
-        : '0'
-    }));
   }
 
   static async processClaim(
@@ -119,7 +144,6 @@ export class ClaimsService {
 
     const contribution = contributionResult.rows[0];
     
-    // ✅ FIXED: Use correct static method syntax
     const finalClaimAmount = claimAmount || ClaimsService.calculateClaimableAmount(contribution);
     const finalClaimType = claimType || (contribution.is_successful ? 'reward' : 'refund');
 
@@ -144,6 +168,16 @@ export class ClaimsService {
     ]);
 
     return result.rows[0];
+  }
+
+  // ✅ ADDED: Status calculation method
+  private static getClaimStatus(row: any, isClaimable: boolean): string {
+    if (row.is_claimed) return 'claimed';
+    if (!row.is_finalized) return 'pending_finalization';
+    if (!row.v1_token_mint && !row.v2_token_mint) return 'missing_token_mint';
+    if (!row.vault) return 'missing_vault';
+    if (isClaimable) return 'available';
+    return 'unavailable';
   }
 
   // ✅ IMPROVED: Added input validation and better error handling
